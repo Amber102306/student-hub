@@ -1,271 +1,439 @@
 import { useState } from 'react';
-import { LayoutDashboard, User, Book, Calendar, FileText, LogOut, Moon, Sun} from 'lucide-react';
+import { LayoutDashboard, User, Book, Calendar, FileText, Printer, AlertTriangle, Lock, Edit2 } from 'lucide-react';
+import { Shell, PageHeader, Badge, Modal, ConfirmModal, Field, EmptyState } from './components';
+import {
+  DAYS, MAX_UNITS, enrich, overlaps, timeRange, toMin, fmtTime, fmtDate, gradeOf, finalRating, remarkOf,
+  daysFromToday, initials, pct,
+} from './data';
 
-export default function StudentPortal({ theme, toggleTheme, onLogout }) {
-  const [activePage, setActivePage] = useState('dashboard');
+const NAV = [
+  { key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { key: 'profile', label: 'Student Profile', icon: User },
+  { key: 'subjects', label: 'Subject List', icon: Book },
+  { key: 'schedule', label: 'Class Schedule', icon: Calendar },
+  { key: 'records', label: 'Academic Records', icon: FileText },
+];
 
-  // Mock data based on the provided StudentHub screenshots
-  const profileData = { 
-    name: 'Bryce Amber', 
-    course: 'BSIT - Web Development', 
-    email: 'student@email.com', 
-    studentNo: '2026-00123' 
+export default function StudentPortal({ student, db, theme, toggleTheme, onLogout, notify }) {
+  const [page, setPage] = useState('dashboard');
+  const [dropTarget, setDropTarget] = useState(null);
+  const [profileModal, setProfileModal] = useState(null); // 'edit' | 'password'
+
+  // ----- Data for this student -----
+  const regs = db.registrations
+    .filter((r) => r.studentId === student.id)
+    .map((r) => ({ ...r, cls: enrich(db, db.classes.find((c) => c.id === r.classId)) }))
+    .filter((r) => r.cls?.subject);
+  const active = regs.filter((r) => r.status !== 'rejected');
+  const approved = regs.filter((r) => r.status === 'approved');
+  const pending = regs.filter((r) => r.status === 'pending');
+  const unitsLoaded = active.reduce((n, r) => n + r.cls.subject.units, 0);
+
+  const conflicts = [];
+  active.forEach((a, i) => active.slice(i + 1).forEach((b) => overlaps(a.cls, b.cls) && conflicts.push([a, b])));
+  const conflictIds = new Set(conflicts.flat().map((r) => r.id));
+
+  const rated = approved.map((r) => ({ r, rating: finalRating(gradeOf(db.grades, student.id, r.cls.subjectId)) }));
+  const posted = rated.filter((x) => x.rating != null);
+  const unitsPosted = posted.reduce((n, x) => n + x.r.cls.subject.units, 0);
+  const gwa = unitsPosted ? posted.reduce((n, x) => n + x.rating * x.r.cls.subject.units, 0) / unitsPosted : null;
+
+  const hour = new Date().getHours();
+  const greeting = hour < 12 ? 'Good Morning' : hour < 18 ? 'Good Afternoon' : 'Good Evening';
+
+  // ----- Registering for a class -----
+  const blockReason = (c) => {
+    if (active.some((r) => r.cls.subjectId === c.subjectId)) return 'Already registered for this subject.';
+    const clash = active.find((r) => overlaps(r.cls, c));
+    if (clash) return `Overlaps with ${clash.cls.subject.code} on ${clash.cls.day}.`;
+    if (unitsLoaded + c.subject.units > MAX_UNITS) return `Over the ${MAX_UNITS}-unit limit.`;
+    return null;
   };
-  
-  const subjects = [
-    { code: 'IT 201', name: 'Web Application Development', prof: 'Prof. Smith', units: 3 },
-    { code: 'IT 202', name: 'Information Assurance and Security', prof: 'Prof. Johnson', units: 3 },
-    { code: 'IT 203', name: 'Database Management Systems', prof: 'Prof. Williams', units: 4 },
-    { code: 'IT 204', name: 'Data Structures and Algorithms', prof: 'Prof. Brown', units: 3 }
-  ];
 
+  const register = (c) => {
+    const reason = blockReason(c);
+    if (reason) return notify(reason, 'error');
+    db.register(student.id, c.id);
+    notify('Registration sent. Wait for admin approval.');
+  };
+
+  const confirmDrop = () => {
+    db.dropReg(dropTarget.id);
+    notify(`${dropTarget.cls.subject.code} removed from your list.`);
+    setDropTarget(null);
+  };
+
+  const available = db.classes.map((c) => enrich(db, c)).filter((c) => c.subject && !active.some((r) => r.classId === c.id));
+
+  // ----- Pages -----
   const renderContent = () => {
-    switch (activePage) {
-      case 'dashboard':
+    switch (page) {
+      case 'dashboard': {
+        const upcoming = approved
+          .slice()
+          .sort((a, b) => daysFromToday(a.cls.day) - daysFromToday(b.cls.day) || toMin(a.cls.start) - toMin(b.cls.start))
+          .slice(0, 4);
         return (
           <>
-            <div className="page-header" style={{ marginBottom: '2rem' }}>
-              <h1 style={{ fontSize: '1.75rem', marginBottom: '0.25rem' }}>Good Morning, {profileData.name} 👋</h1>
-              <p style={{ color: 'var(--text-muted)' }}>{profileData.course}</p>
-            </div>
+            <PageHeader title={`${greeting}, ${student.name.split(' ')[0]}`} subtitle={student.course} />
 
             <div className="stats-grid">
               <div className="stat-card">
                 <p className="stat-label">Registered Courses</p>
-                <div className="stat-value">5 <span className="stat-badge badge-blue">+1 this week</span></div>
+                <div className="stat-value">{approved.length} <Badge status="approved">Approved</Badge></div>
               </div>
               <div className="stat-card">
                 <p className="stat-label">Weekly Classes</p>
-                <div className="stat-value">18 <span className="stat-badge badge-green">This week</span></div>
+                <div className="stat-value">{approved.length} <span className="stat-badge badge-blue">This week</span></div>
               </div>
-              <div className="stat-card">
+              <div className="stat-card clickable" role="button" tabIndex={0} onClick={() => setPage('subjects')} onKeyDown={(e) => e.key === 'Enter' && setPage('subjects')}>
                 <p className="stat-label">Pending Registrations</p>
-                <div className="stat-value">2 <span className="stat-badge badge-yellow">Action required</span></div>
+                <div className="stat-value">{pending.length} <Badge status={pending.length ? 'pending' : 'approved'}>{pending.length ? 'Awaiting approval' : 'All clear'}</Badge></div>
               </div>
-              <div className="stat-card">
+              <div className="stat-card clickable" role="button" tabIndex={0} onClick={() => setPage('schedule')} onKeyDown={(e) => e.key === 'Enter' && setPage('schedule')}>
                 <p className="stat-label">Schedule Conflicts</p>
-                <div className="stat-value">1 <span className="stat-badge badge-red">Resolve now</span></div>
+                <div className="stat-value">{conflicts.length} <Badge status={conflicts.length ? 'rejected' : 'approved'}>{conflicts.length ? 'Resolve now' : 'No conflicts'}</Badge></div>
               </div>
             </div>
 
             <div className="dashboard-columns">
               <div className="table-container" style={{ padding: '1.5rem' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1rem' }}>
-                  <h3 style={{ color: 'var(--text-main)' }}>Upcoming Classes</h3>
-                  <a href="#" style={{ color: 'var(--btn-primary-bg)', fontSize: '0.875rem', textDecoration: 'none' }} onClick={(e) => { e.preventDefault(); setActivePage('schedule'); }}>Full Schedule →</a>
+                <div className="card-title-row">
+                  <h3>Upcoming Classes</h3>
+                  <a href="#" className="link-accent" onClick={(e) => { e.preventDefault(); setPage('schedule'); }}>Full Schedule</a>
                 </div>
-                <table>
-                  <thead>
-                    <tr>
-                      <th>DAY</th>
-                      <th>SUBJECT</th>
-                      <th>TIME</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr>
-                      <td><strong>Mon</strong></td>
-                      <td>Web Systems<br/><small style={{color: 'var(--text-muted)'}}>IT201</small></td>
-                      <td>09:00 - 10:30</td>
-                    </tr>
-                    <tr>
-                      <td><strong>Tue</strong></td>
-                      <td>Database Management<br/><small style={{color: 'var(--text-muted)'}}>IT301</small></td>
-                      <td>10:30 - 12:00</td>
-                    </tr>
-                    <tr>
-                      <td><strong>Wed</strong></td>
-                      <td>Information Assurance<br/><small style={{color: 'var(--text-muted)'}}>IT401</small></td>
-                      <td>01:00 - 02:30</td>
-                    </tr>
-                  </tbody>
-                </table>
+                {upcoming.length === 0 ? (
+                  <EmptyState text="No approved classes yet.">
+                    <button className="btn-primary btn-sm" style={{ margin: '1rem auto 0' }} onClick={() => setPage('subjects')}>Register for classes</button>
+                  </EmptyState>
+                ) : (
+                  <div className="table-scroll">
+                    <table>
+                      <thead><tr><th>Day</th><th>Subject</th><th>Time</th><th>Room</th></tr></thead>
+                      <tbody>
+                        {upcoming.map((r) => (
+                          <tr key={r.id}>
+                            <td><strong>{r.cls.day}</strong></td>
+                            <td>{r.cls.subject.name}<br /><small className="muted">{r.cls.subject.code}</small></td>
+                            <td>{timeRange(r.cls)}</td>
+                            <td>{r.cls.room}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
-              
-              <div className="table-container" style={{ padding: '1.5rem' }}>
-                <h3 style={{ color: 'var(--text-main)', marginBottom: '1.5rem' }}>Semester Progress</h3>
-                
-                <div className="progress-group">
-                  <div className="progress-label"><span>Semester Completion</span> <span>60%</span></div>
-                  <div className="progress-bar"><div className="progress-fill fill-blue" style={{width: '60%'}}></div></div>
-                </div>
-                
-                <div className="progress-group">
-                  <div className="progress-label"><span>Credits Earned</span> <span>84/140</span></div>
-                  <div className="progress-bar"><div className="progress-fill fill-navy" style={{width: '60%'}}></div></div>
-                </div>
-                
-                <div className="progress-group">
-                  <div className="progress-label"><span>Attendance</span> <span>87%</span></div>
-                  <div className="progress-bar"><div className="progress-fill fill-green" style={{width: '87%'}}></div></div>
-                </div>
 
+              <div className="table-container" style={{ padding: '1.5rem' }}>
+                <h3 style={{ marginBottom: '1.5rem' }}>Semester Progress</h3>
+                <Progress label="Units Loaded" value={`${unitsLoaded}/${MAX_UNITS}`} width={pct(unitsLoaded, MAX_UNITS)} fill="fill-blue" />
+                <Progress label="Registrations Approved" value={`${approved.length}/${active.length}`} width={pct(approved.length, active.length)} fill="fill-navy" />
+                <Progress label="Grades Posted" value={`${posted.length}/${approved.length}`} width={pct(posted.length, approved.length)} fill="fill-green" />
                 <div style={{ marginTop: '2rem' }}>
-                  <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>Current CGPA</p>
-                  <h2 style={{ color: 'var(--text-main)', fontSize: '2rem' }}>1.45</h2>
+                  <p className="muted" style={{ fontSize: '0.875rem' }}>Current GWA</p>
+                  <h2 style={{ fontSize: '2rem' }}>{gwa == null ? '—' : gwa.toFixed(2)}</h2>
                 </div>
               </div>
             </div>
           </>
         );
+      }
 
       case 'profile':
         return (
-          <div className="table-container" style={{ padding: '2rem' }}>
-            <h2 style={{ marginBottom: '2rem', color: 'var(--text-main)' }}>Student Profile</h2>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem', marginBottom: '2.5rem' }}>
-              <div className="avatar-large">BA</div>
-              <div>
-                <h3 style={{ fontSize: '1.5rem', color: 'var(--text-main)' }}>{profileData.name}</h3>
-                <p style={{ color: 'var(--text-muted)' }}>{profileData.course.split(' - ')[0]}</p>
-                <p style={{ color: 'var(--text-muted)' }}>Specialization: {profileData.course.split(' - ')[1]}</p>
+          <>
+            <PageHeader title="Student Profile">
+              <div className="action-buttons">
+                <button className="btn-primary" onClick={() => setProfileModal('edit')}><Edit2 size={16} /> Edit Profile</button>
+                <button className="btn-secondary" onClick={() => setProfileModal('password')}><Lock size={16} /> Password</button>
+              </div>
+            </PageHeader>
+            <div className="table-container" style={{ padding: '2rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem', marginBottom: '2.5rem', flexWrap: 'wrap' }}>
+                <div className="avatar-large">{initials(student.name)}</div>
+                <div>
+                  <h3 style={{ fontSize: '1.5rem' }}>{student.name}</h3>
+                  <p className="muted">{student.course.split(' - ')[0]}</p>
+                  <p className="muted">Specialization: {student.course.split(' - ')[1]}</p>
+                </div>
+              </div>
+              <div className="info-grid">
+                <Info label="Email Address" value={student.email} />
+                <Info label="Student Number" value={student.studentNo} />
+                <Info label="Phone" value={student.phone || '—'} />
+                <Info label="Date of Birth" value={fmtDate(student.dob)} />
+                <Info label="Units Loaded" value={`${unitsLoaded} of ${MAX_UNITS}`} />
+                <Info label="Registered Subjects" value={approved.length} />
               </div>
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem', borderTop: '1px solid var(--border-color)', paddingTop: '2rem' }}>
-              <div>
-                <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '0.25rem' }}>Email Address</p>
-                <p style={{ fontWeight: '500' }}>{profileData.email}</p>
-              </div>
-              <div>
-                <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '0.25rem' }}>Student Number</p>
-                <p style={{ fontWeight: '500' }}>{profileData.studentNo}</p>
-              </div>
-            </div>
-          </div>
+          </>
         );
 
       case 'subjects':
         return (
           <>
-            <h2 style={{ marginBottom: '1.5rem', color: 'var(--text-main)' }}>Subject List</h2>
-            <div className="subject-grid">
-              {subjects.map((sub, idx) => (
-                <div key={idx} className="subject-card">
-                  <h4 style={{ color: 'var(--btn-primary-bg)', marginBottom: '0.25rem' }}>{sub.name}</h4>
-                  <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '1.5rem' }}>{sub.code}</p>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-muted)', fontSize: '0.875rem' }}>
-                    <span>{sub.prof}</span>
-                    <span>{sub.units} Units</span>
+            <PageHeader title="Subject List" subtitle={`${unitsLoaded} of ${MAX_UNITS} units loaded`} />
+
+            <h3 className="section-title">My Subjects</h3>
+            {regs.length === 0 ? (
+              <div className="table-container"><EmptyState text="You have no subjects yet. Register for a class below." /></div>
+            ) : (
+              <div className="subject-grid">
+                {regs.map((r) => (
+                  <div key={r.id} className="subject-card">
+                    <div className="card-title-row">
+                      <h4 style={{ color: 'var(--btn-primary-bg)' }}>{r.cls.subject.name}</h4>
+                      <Badge status={r.status} />
+                    </div>
+                    <p className="muted" style={{ fontSize: '0.875rem', marginBottom: '1rem' }}>
+                      {r.cls.subject.code} - {r.cls.section} - {r.cls.day} {timeRange(r.cls)}
+                    </p>
+                    <div className="card-title-row muted" style={{ fontSize: '0.875rem' }}>
+                      <span>{r.cls.teacher?.name}</span>
+                      <span>{r.cls.subject.units} Units</span>
+                    </div>
+                    <button className="btn-danger btn-sm" style={{ marginTop: '1rem' }} onClick={() => setDropTarget(r)}>
+                      {r.status === 'rejected' ? 'Remove' : 'Drop'}
+                    </button>
                   </div>
-                </div>
-              ))}
+                ))}
+              </div>
+            )}
+
+            <h3 className="section-title">Available Classes</h3>
+            <div className="table-container">
+              <div className="table-scroll">
+                <table>
+                  <thead><tr><th>Subject</th><th>Section</th><th>Teacher</th><th>Schedule</th><th>Units</th><th>Action</th></tr></thead>
+                  <tbody>
+                    {available.map((c) => {
+                      const reason = blockReason(c);
+                      return (
+                        <tr key={c.id}>
+                          <td><strong>{c.subject.code}</strong><br /><small className="muted">{c.subject.name}</small></td>
+                          <td>{c.section}</td>
+                          <td>{c.teacher?.name}</td>
+                          <td>{c.day} {timeRange(c)}<br /><small className="muted">{c.room}</small></td>
+                          <td>{c.subject.units}</td>
+                          <td>
+                            <button className="btn-primary btn-sm" disabled={!!reason} onClick={() => register(c)}>Register</button>
+                            {reason && <small className="muted block">{reason}</small>}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                {available.length === 0 && <EmptyState text="No other classes are open right now." />}
+              </div>
             </div>
           </>
         );
 
-      case 'schedule':
+      case 'schedule': {
+        const starts = [...new Set(active.map((r) => r.cls.start))].sort((a, b) => toMin(a) - toMin(b));
         return (
-          <div className="table-container" style={{ padding: '1.5rem' }}>
-            <h2 style={{ marginBottom: '1.5rem', color: 'var(--text-main)' }}>Weekly Class Schedule</h2>
-            <table className="schedule-table">
-              <thead>
-                <tr>
-                  <th>Time</th><th>Mon</th><th>Tue</th><th>Wed</th><th>Thu</th><th>Fri</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td><strong>08:00 AM</strong></td><td></td><td></td><td></td><td></td>
-                  <td><div className="schedule-block"><strong>Data Struct</strong><br/>IT204</div></td>
-                </tr>
-                <tr>
-                  <td><strong>09:00 AM</strong></td>
-                  <td><div className="schedule-block"><strong>Web Dev</strong><br/>IT201</div></td>
-                  <td></td><td></td><td></td><td></td>
-                </tr>
-                <tr>
-                  <td><strong>10:30 AM</strong></td><td></td>
-                  <td><div className="schedule-block"><strong>Database</strong><br/>IT301</div></td>
-                  <td></td><td></td><td></td>
-                </tr>
-                <tr>
-                  <td><strong>01:00 PM</strong></td><td></td><td></td>
-                  <td><div className="schedule-block"><strong>InfoSec</strong><br/>IT401</div></td>
-                  <td></td><td></td>
-                </tr>
-                <tr>
-                  <td><strong>02:30 PM</strong></td><td></td><td></td><td></td>
-                  <td><div className="schedule-block"><strong>Networking</strong><br/>IT302</div></td>
-                  <td></td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
+          <>
+            <PageHeader title="Class Schedule" subtitle="Dashed blocks are waiting for approval.">
+              <button className="btn-secondary" onClick={() => window.print()}><Printer size={16} /> Print</button>
+            </PageHeader>
+
+            {conflicts.length > 0 && (
+              <div className="alert alert-danger" role="alert">
+                <AlertTriangle size={18} />
+                <div style={{ flex: 1 }}>
+                  <strong>{conflicts.length} schedule conflict(s).</strong> Drop one subject in each pair to fix it.
+                  {conflicts.map(([a, b]) => (
+                    <div key={a.id + b.id} className="conflict-row">
+                      <span>{a.cls.subject.code} and {b.cls.subject.code} overlap on {a.cls.day}.</span>
+                      <span className="no-print">
+                        <button className="btn-danger btn-sm" onClick={() => setDropTarget(a)}>Drop {a.cls.subject.code}</button>{' '}
+                        <button className="btn-danger btn-sm" onClick={() => setDropTarget(b)}>Drop {b.cls.subject.code}</button>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="table-container" style={{ padding: '1.5rem' }}>
+              {active.length === 0 ? (
+                <EmptyState text="Your schedule is empty. Register for classes to see them here." />
+              ) : (
+                <div className="table-scroll">
+                  <table className="schedule-table">
+                    <thead><tr><th>Time</th>{DAYS.map((d) => <th key={d}>{d}</th>)}</tr></thead>
+                    <tbody>
+                      {starts.map((s) => (
+                        <tr key={s}>
+                          <td><strong>{fmtTime(s)}</strong></td>
+                          {DAYS.map((d) => {
+                            const r = active.find((x) => x.cls.day === d && x.cls.start === s);
+                            return (
+                              <td key={d}>
+                                {r && (
+                                  <div className={`schedule-block ${r.status === 'pending' ? 'pending' : ''} ${conflictIds.has(r.id) ? 'conflict' : ''}`}>
+                                    <strong>{r.cls.subject.code}</strong><br />
+                                    {r.cls.subject.name}<br />
+                                    <small>{timeRange(r.cls)} - {r.cls.room}</small>
+                                  </div>
+                                )}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </>
         );
+      }
 
       case 'records':
         return (
-          <div className="table-container" style={{ padding: '1.5rem' }}>
-            <h2 style={{ marginBottom: '1.5rem', color: 'var(--text-main)' }}>Academic Records</h2>
-            <table>
-              <thead>
-                <tr>
-                  <th>Subject</th>
-                  <th>Midterm Grade</th>
-                  <th>Finals Grade</th>
-                  <th>Final Rating</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td>Web Application Development</td><td>1.5</td><td>1.25</td><td><strong>1.25</strong></td>
-                </tr>
-                <tr>
-                  <td>Information Assurance</td><td>1.75</td><td>1.5</td><td><strong>1.5</strong></td>
-                </tr>
-                <tr>
-                  <td>Database Management</td><td>1.25</td><td>1.25</td><td><strong>1.25</strong></td>
-                </tr>
-                <tr>
-                  <td>Data Structures</td><td>2</td><td>1.75</td><td><strong>1.75</strong></td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
+          <>
+            <PageHeader title="Academic Records" subtitle="Grades use a 1.00 (best) to 5.00 scale. 3.00 or better is passing.">
+              <button className="btn-secondary" onClick={() => window.print()}><Printer size={16} /> Print</button>
+            </PageHeader>
+            <div className="table-container">
+              <div className="table-scroll">
+                <table>
+                  <thead><tr><th>Subject</th><th>Units</th><th>Midterm Grade</th><th>Finals Grade</th><th>Final Rating</th><th>Remarks</th></tr></thead>
+                  <tbody>
+                    {rated.map(({ r, rating }) => {
+                      const g = gradeOf(db.grades, student.id, r.cls.subjectId);
+                      const show = (v) => (v === '' || v == null ? '—' : Number(v).toFixed(2));
+                      const remark = remarkOf(rating);
+                      return (
+                        <tr key={r.id}>
+                          <td>{r.cls.subject.name}<br /><small className="muted">{r.cls.subject.code}</small></td>
+                          <td>{r.cls.subject.units}</td>
+                          <td>{show(g?.midterm)}</td>
+                          <td>{show(g?.finals)}</td>
+                          <td><strong>{show(rating)}</strong></td>
+                          <td>{remark ? <Badge status={remark} /> : <span className="muted">Not posted</span>}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                  {gwa != null && (
+                    <tfoot>
+                      <tr><td colSpan="4"><strong>General Weighted Average (GWA)</strong></td><td colSpan="2"><strong>{gwa.toFixed(2)}</strong></td></tr>
+                    </tfoot>
+                  )}
+                </table>
+                {rated.length === 0 && <EmptyState text="No records yet. Grades appear here after your registrations are approved." />}
+              </div>
+            </div>
+          </>
         );
+
       default:
         return <div>Page not found</div>;
     }
   };
 
   return (
-    <div className="dashboard-layout">
-      <aside className="sidebar">
-        <div className="sidebar-header">
-          <h2>AttendX Student</h2>
-        </div>
-        <nav className="sidebar-nav">
-          <a href="#" className={`nav-item ${activePage === 'dashboard' ? 'active' : ''}`} onClick={(e) => { e.preventDefault(); setActivePage('dashboard'); }}>
-            <LayoutDashboard size={18} /> Dashboard
-          </a>
-          <a href="#" className={`nav-item ${activePage === 'profile' ? 'active' : ''}`} onClick={(e) => { e.preventDefault(); setActivePage('profile'); }}>
-            <User size={18} /> Student Profile
-          </a>
-          <a href="#" className={`nav-item ${activePage === 'subjects' ? 'active' : ''}`} onClick={(e) => { e.preventDefault(); setActivePage('subjects'); }}>
-            <Book size={18} /> Subject List
-          </a>
-          <a href="#" className={`nav-item ${activePage === 'schedule' ? 'active' : ''}`} onClick={(e) => { e.preventDefault(); setActivePage('schedule'); }}>
-            <Calendar size={18} /> Class Schedule
-          </a>
-          <a href="#" className={`nav-item ${activePage === 'records' ? 'active' : ''}`} onClick={(e) => { e.preventDefault(); setActivePage('records'); }}>
-            <FileText size={18} /> Academic Records
-          </a>
-        </nav>
-        <div className="sidebar-footer">
-          <button className="theme-toggle-btn" onClick={toggleTheme}>
-            {theme === 'light' ? <><Moon size={18} /> Dark Mode</> : <><Sun size={18} /> Light Mode</>}
-          </button>
-          <button className="logout-btn" onClick={onLogout}>
-            <LogOut size={18} /> Logout
-          </button>
-        </div>
-      </aside>
+    <Shell
+      brand="AttendX Student" userLabel={student.name} sections={[{ items: NAV.map((n) => (n.key === 'subjects' ? { ...n, count: pending.length } : n)) }]}
+      active={page} onNav={setPage} theme={theme} toggleTheme={toggleTheme} onLogout={onLogout}
+    >
+      {renderContent()}
 
-      <main className="main-content">
-        {/* The top-nav has been completely removed to match the Admin format */}
-            
-        {/* renderContent already contains the specific headers for each page */}            {renderContent()}
-      </main>
-    </div>
+      {dropTarget && (
+        <ConfirmModal
+          title={dropTarget.status === 'rejected' ? 'Remove Subject' : 'Drop Subject'}
+          confirmLabel={dropTarget.status === 'rejected' ? 'Remove' : 'Drop'}
+          message={<p>Do you want to {dropTarget.status === 'rejected' ? 'remove' : 'drop'} <strong>{dropTarget.cls.subject.code} - {dropTarget.cls.subject.name}</strong>? You can register again later.</p>}
+          onConfirm={confirmDrop}
+          onClose={() => setDropTarget(null)}
+        />
+      )}
+      {profileModal === 'edit' && <EditProfileModal student={student} db={db} notify={notify} onClose={() => setProfileModal(null)} />}
+      {profileModal === 'password' && <PasswordModal student={student} db={db} notify={notify} onClose={() => setProfileModal(null)} />}
+    </Shell>
+  );
+}
+
+// ---------- small pieces ----------
+const Progress = ({ label, value, width, fill }) => (
+  <div className="progress-group">
+    <div className="progress-label"><span>{label}</span><span>{value}</span></div>
+    <div className="progress-bar"><div className={`progress-fill ${fill}`} style={{ width: `${width}%` }} /></div>
+  </div>
+);
+
+const Info = ({ label, value }) => (
+  <div>
+    <p className="muted" style={{ fontSize: '0.875rem', marginBottom: '0.25rem' }}>{label}</p>
+    <p style={{ fontWeight: 500 }}>{value}</p>
+  </div>
+);
+
+function EditProfileModal({ student, db, notify, onClose }) {
+  const [form, setForm] = useState({ name: student.name, phone: student.phone || '', dob: student.dob || '' });
+  const [error, setError] = useState('');
+  const fields = [
+    { name: 'name', label: 'Full Name' },
+    { name: 'phone', label: 'Phone', optional: true, placeholder: '+639171234567' },
+    { name: 'dob', label: 'Date of Birth', type: 'date', optional: true },
+  ];
+  const submit = (e) => {
+    e.preventDefault();
+    if (!form.name.trim()) return setError('Name is required.');
+    if (form.phone && !/^\+?[0-9 -]{7,15}$/.test(form.phone)) return setError('Phone must have 7 to 15 digits.');
+    if (form.dob && new Date(form.dob) > new Date()) return setError('Date of birth must be a past date.');
+    db.editStudent(student.id, { name: form.name.trim(), phone: form.phone.trim(), dob: form.dob });
+    notify('Profile updated.');
+    onClose();
+  };
+  return (
+    <Modal title="Edit Profile" onClose={onClose}>
+      <form onSubmit={submit}>
+        {error && <div className="form-error" role="alert">{error}</div>}
+        {fields.map((f) => <Field key={f.name} field={f} value={form[f.name]} onChange={(e) => setForm({ ...form, [e.target.name]: e.target.value })} />)}
+        <p className="form-hint">Email, course and student number can only be changed by the admin.</p>
+        <div className="modal-actions">
+          <button type="button" className="btn-cancel" onClick={onClose}>Cancel</button>
+          <button type="submit" className="btn-primary">Save Changes</button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function PasswordModal({ student, db, notify, onClose }) {
+  const [form, setForm] = useState({ current: '', next: '', confirm: '' });
+  const [error, setError] = useState('');
+  const fields = [
+    { name: 'current', label: 'Current Password', type: 'password', autoComplete: 'current-password' },
+    { name: 'next', label: 'New Password', type: 'password', autoComplete: 'new-password', hint: 'At least 8 characters.' },
+    { name: 'confirm', label: 'Confirm New Password', type: 'password', autoComplete: 'new-password' },
+  ];
+  const submit = (e) => {
+    e.preventDefault();
+    if (form.current !== student.password) return setError('Current password is wrong.');
+    if (form.next.length < 8) return setError('New password must have at least 8 characters.');
+    if (form.next === form.current) return setError('New password must be different from the current one.');
+    if (form.next !== form.confirm) return setError('New passwords do not match.');
+    db.editStudent(student.id, { password: form.next });
+    notify('Password changed.');
+    onClose();
+  };
+  return (
+    <Modal title="Change Password" onClose={onClose}>
+      <form onSubmit={submit}>
+        {error && <div className="form-error" role="alert">{error}</div>}
+        {fields.map((f) => <Field key={f.name} field={f} value={form[f.name]} onChange={(e) => setForm({ ...form, [e.target.name]: e.target.value })} />)}
+        <div className="modal-actions">
+          <button type="button" className="btn-cancel" onClick={onClose}>Cancel</button>
+          <button type="submit" className="btn-primary">Change Password</button>
+        </div>
+      </form>
+    </Modal>
   );
 }
