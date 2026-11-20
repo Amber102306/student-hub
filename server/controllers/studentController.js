@@ -11,7 +11,7 @@ const withEmail = (s) => ({ ...s, email: s.userId?.email, userId: s.userId?._id 
 // GET /api/students?q=maria
 export const getStudents = asyncHandler(async (req, res) => {
   const q = req.query.q?.trim();
-  const filter = q ? { $or: [{ name: new RegExp(q, 'i') }, { studentNo: new RegExp(q, 'i') }, { course: new RegExp(q, 'i') }] } : {};
+  const filter = q ? { $or: [{ name: new RegExp(q, 'i') }, { studentNo: new RegExp(q, 'i') }, { program: new RegExp(q, 'i') }] } : {};
   const list = await Student.find(filter).populate('userId', 'email').sort('studentNo').lean();
   res.json(list.map(withEmail));
 });
@@ -39,7 +39,7 @@ export const bulkCreateStudents = asyncHandler(async (req, res) => {
 
 // PUT /api/students/:id  (admin edits)
 export const updateStudent = asyncHandler(async (req, res) => {
-  const { name, phone, dob, course, email } = req.body;
+  const { name, phone, dob, program, email } = req.body;
   const student = await Student.findById(req.params.id);
   if (!student) throw new HttpError(404, 'Student not found.');
   if (email) {
@@ -47,7 +47,7 @@ export const updateStudent = asyncHandler(async (req, res) => {
     if (await User.exists({ email: mail, _id: { $ne: student.userId } })) throw new HttpError(409, 'That email is already used.');
     await User.updateOne({ _id: student.userId }, { email: mail });
   }
-  Object.assign(student, { name, phone: phone || undefined, dob: dob || undefined, course });
+  Object.assign(student, { name, phone: phone || undefined, dob: dob || undefined, program });
   await student.save();
   res.json(student);
 });

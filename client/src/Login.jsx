@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Eye, EyeOff, Moon, Sun } from 'lucide-react';
-import { ADMIN, DEMO_STUDENT, COURSES } from './data';
+import { ADMIN, DEMO_STUDENT, PROGRAMS } from './data';
 import { api, setToken } from './api';
 import { buildSession } from './store';
 
@@ -23,7 +23,7 @@ export default function Login({ theme, toggleTheme, onLogin, notify }) {
   const [password, setPassword] = useState(DEMO_STUDENT.password);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const [signup, setSignup] = useState({ name: '', email: '', course: COURSES[0], password: '', confirm: '' });
+  const [signup, setSignup] = useState({ name: '', email: '', program: PROGRAMS[0], password: '', confirm: '' });
 
   const demo = role === 'admin' ? ADMIN : DEMO_STUDENT;
 
@@ -62,7 +62,7 @@ export default function Login({ theme, toggleTheme, onLogin, notify }) {
     setBusy(true);
     try {
       await api.post('/auth/register', {
-        name: signup.name.trim(), email: signup.email.trim(), course: signup.course, password: signup.password,
+        name: signup.name.trim(), email: signup.email.trim(), program: signup.program, password: signup.password,
       });
       notify('Account created. You can log in now.');
       setRole('student');
@@ -137,9 +137,9 @@ export default function Login({ theme, toggleTheme, onLogin, notify }) {
                 <input id="su-email" name="email" type="email" value={signup.email} onChange={setS} required />
               </div>
               <div className="form-group">
-                <label htmlFor="su-course">Course</label>
-                <select id="su-course" name="course" value={signup.course} onChange={setS} required>
-                  {COURSES.map((c) => <option key={c} value={c}>{c}</option>)}
+                <label htmlFor="su-program">Program</label>
+                <select id="su-program" name="program" value={signup.program} onChange={setS} required>
+                  {PROGRAMS.map((p) => <option key={p} value={p}>{p}</option>)}
                 </select>
               </div>
               <div className="form-group">

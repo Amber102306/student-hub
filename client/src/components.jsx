@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
-import { X, LogOut, Moon, Sun, ChevronDown } from 'lucide-react';
+import { X, LogOut, Moon, Sun, ChevronDown, Plus } from 'lucide-react';
+import { DAYS, dayShort, timeRange, sortMeetings } from './data';
 
-export function Modal({ title, onClose, children }) {
+export function Modal({ title, onClose, wide, children }) {
   useEffect(() => {
     const onKey = (e) => e.key === 'Escape' && onClose();
     window.addEventListener('keydown', onKey);
@@ -10,7 +11,7 @@ export function Modal({ title, onClose, children }) {
 
   return (
     <div className="modal-overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal-content" role="dialog" aria-modal="true" aria-label={title}>
+      <div className={`modal-content ${wide ? 'wide' : ''}`} role="dialog" aria-modal="true" aria-label={title}>
         <div className="modal-header">
           <h2>{title}</h2>
           <button type="button" className="close-btn" onClick={onClose} aria-label="Close"><X size={20} /></button>
@@ -33,8 +34,55 @@ export function ConfirmModal({ title, message, confirmLabel = 'Delete', danger =
   );
 }
 
+// Shows every time slot of a class, one per line: "Mon 01:00PM - 03:00PM - 409MB"
+export function Meetings({ meetings, rooms = true }) {
+  return (
+    <div className="meeting-list">
+      {sortMeetings(meetings).map((m, i) => (
+        <div key={i}>
+          <strong>{dayShort(m.day)}</strong> {timeRange(m)}
+          {rooms && <span className="muted"> - {m.room}</span>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// A class can meet many times a week. Each row is one time slot.
+function MeetingsField({ field, value, onChange }) {
+  const rows = value || [];
+  const set = (next) => onChange({ target: { name: field.name, value: next } });
+  const update = (i, key, v) => set(rows.map((r, j) => (j === i ? { ...r, [key]: v } : r)));
+  return (
+    <div className="form-group">
+      <label>{field.label}</label>
+      {rows.map((m, i) => (
+        <div className="meeting-row" key={i}>
+          <select aria-label="Day" value={m.day} onChange={(e) => update(i, 'day', e.target.value)} required>
+            {DAYS.map((d) => <option key={d} value={d}>{d}</option>)}
+          </select>
+          <input type="time" aria-label="Start time" value={m.start} onChange={(e) => update(i, 'start', e.target.value)} required />
+          <input type="time" aria-label="End time" value={m.end} onChange={(e) => update(i, 'end', e.target.value)} required />
+          <input aria-label="Room" placeholder="409MB" value={m.room} onChange={(e) => update(i, 'room', e.target.value)} required />
+          <button type="button" className="action-delete" aria-label="Remove time slot" disabled={rows.length === 1} onClick={() => set(rows.filter((_, j) => j !== i))}>
+            <X size={16} />
+          </button>
+        </div>
+      ))}
+      <button
+        type="button" className="btn-secondary btn-sm" style={{ alignSelf: 'flex-start' }}
+        onClick={() => set([...rows, { day: 'Monday', start: '', end: '', room: rows[rows.length - 1]?.room || '' }])}
+      >
+        <Plus size={14} /> Add time slot
+      </button>
+      {field.hint && <small className="form-hint">{field.hint}</small>}
+    </div>
+  );
+}
+
 // field = { name, label, type, options, optional, placeholder, hint, min, max, step }
 export function Field({ field, value, onChange }) {
+  if (field.type === 'meetings') return <MeetingsField field={field} value={value} onChange={onChange} />;
   const id = `field-${field.name}`;
   const common = { id, name: field.name, value: value ?? '', onChange, required: !field.optional };
   return (
@@ -61,7 +109,7 @@ export function Field({ field, value, onChange }) {
   );
 }
 
-const TONE = { pending: 'yellow', approved: 'green', rejected: 'red', passed: 'green', failed: 'red' };
+const TONE = { pending: 'yellow', enrolled: 'green', rejected: 'red', passed: 'green', failed: 'red' };
 
 export function Badge({ status, children }) {
   const label = children ?? status.charAt(0).toUpperCase() + status.slice(1);

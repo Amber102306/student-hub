@@ -15,9 +15,9 @@ const payload = async (user) => ({
 
 // POST /api/auth/register  (student sign up)
 export const register = asyncHandler(async (req, res) => {
-  const { name, email, course, password } = req.body;
+  const { name, email, program, password } = req.body;
   if (!password) throw new HttpError(400, 'Password is required.');
-  const student = await createStudent({ name, email, course, password });
+  const student = await createStudent({ name, email, program, password });
   const user = await User.findById(student.userId);
   res.status(201).json({ token: sign(user), ...(await payload(user)) });
 });

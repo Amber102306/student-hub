@@ -1,24 +1,24 @@
 import { useState, useEffect, useCallback } from 'react';
 import { api } from './api';
 
-const EMPTY = { students: [], teachers: [], subjects: [], classes: [], registrations: [], grades: [] };
+const EMPTY = { students: [], professors: [], courses: [], classes: [], registrations: [], grades: [] };
 const idOf = (x) => (x && typeof x === 'object' ? x._id : x);
 
 // The server uses _id and populated objects. These turn them into the
-// simple shapes the pages already use (id, subjectId, '' for empty grades).
+// simple shapes the pages already use (id, courseId, '' for empty grades).
 const toStudent = (s, email) => ({
   id: s._id, studentNo: s.studentNo, name: s.name, email: s.email ?? email ?? '',
-  phone: s.phone || '', dob: s.dob ? s.dob.slice(0, 10) : '', course: s.course,
+  phone: s.phone || '', dob: s.dob ? s.dob.slice(0, 10) : '', program: s.program,
 });
-const toTeacher = (t) => ({ id: t._id, name: t.name, email: t.email, department: t.department });
-const toSubject = (s) => ({ id: s._id, code: s.code, name: s.name, units: s.units });
+const toProfessor = (p) => ({ id: p._id, name: p.name, email: p.email, department: p.department });
+const toCourse = (c) => ({ id: c._id, code: c.code, description: c.description, units: c.units });
 const toClass = (c) => ({
-  id: c._id, subjectId: idOf(c.subjectId), teacherId: idOf(c.teacherId),
-  section: c.section, day: c.day, start: c.start, end: c.end, room: c.room,
+  id: c._id, courseId: idOf(c.courseId), professorId: idOf(c.professorId), section: c.section,
+  meetings: c.meetings.map((m) => ({ day: m.day, start: m.start, end: m.end, room: m.room })),
 });
 const toReg = (r) => ({ id: r._id, studentId: idOf(r.studentId), classId: idOf(r.classId), status: r.status });
 const toGrade = (g) => ({
-  id: g._id, studentId: idOf(g.studentId), subjectId: idOf(g.subjectId), midterm: g.midterm ?? '', finals: g.finals ?? '',
+  id: g._id, studentId: idOf(g.studentId), courseId: idOf(g.courseId), midterm: g.midterm ?? '', finals: g.finals ?? '',
 });
 
 export const buildSession = ({ user, student }) =>
@@ -35,27 +35,27 @@ export function useDB(session) {
   const reload = useCallback(async () => {
     if (!session) return;
     if (session.role === 'admin') {
-      const [students, teachers, subjects, classes, registrations, grades] = await Promise.all([
-        api.get('/students'), api.get('/teachers'), api.get('/subjects'),
+      const [students, professors, courses, classes, registrations, grades] = await Promise.all([
+        api.get('/students'), api.get('/professors'), api.get('/courses'),
         api.get('/classes'), api.get('/registrations'), api.get('/grades'),
       ]);
       setData({
         students: students.map((s) => toStudent(s)),
-        teachers: teachers.map(toTeacher),
-        subjects: subjects.map(toSubject),
+        professors: professors.map(toProfessor),
+        courses: courses.map(toCourse),
         classes: classes.map(toClass),
         registrations: registrations.map(toReg),
         grades: grades.map(toGrade),
       });
     } else {
-      const [me, teachers, subjects, classes, registrations, grades] = await Promise.all([
-        api.get('/auth/me'), api.get('/teachers'), api.get('/subjects'),
+      const [me, professors, courses, classes, registrations, grades] = await Promise.all([
+        api.get('/auth/me'), api.get('/professors'), api.get('/courses'),
         api.get('/classes'), api.get('/registrations/mine'), api.get('/grades/mine'),
       ]);
       setData({
         students: [toStudent(me.student, me.user.email)],
-        teachers: teachers.map(toTeacher),
-        subjects: subjects.map(toSubject),
+        professors: professors.map(toProfessor),
+        courses: courses.map(toCourse),
         classes: classes.map(toClass),
         registrations: registrations.map(toReg),
         grades: grades.map(toGrade),
@@ -83,17 +83,17 @@ export function useDB(session) {
     loadError,
     reload,
 
-    // Teachers
-    addTeacher: run((v) => api.post('/teachers', v)),
-    editTeacher: run((id, v) => api.put(`/teachers/${id}`, v)),
-    removeTeacher: run((id) => api.del(`/teachers/${id}`)),
-    addTeachers: run((list) => api.post('/teachers/bulk', { teachers: list })),
+    // Professors
+    addProfessor: run((v) => api.post('/professors', v)),
+    editProfessor: run((id, v) => api.put(`/professors/${id}`, v)),
+    removeProfessor: run((id) => api.del(`/professors/${id}`)),
+    addProfessors: run((list) => api.post('/professors/bulk', { professors: list })),
 
-    // Subjects
-    addSubject: run((v) => api.post('/subjects', v)),
-    editSubject: run((id, v) => api.put(`/subjects/${id}`, v)),
-    removeSubject: run((id) => api.del(`/subjects/${id}`)),
-    addSubjects: run((list) => api.post('/subjects/bulk', { subjects: list })),
+    // Courses
+    addCourse: run((v) => api.post('/courses', v)),
+    editCourse: run((id, v) => api.put(`/courses/${id}`, v)),
+    removeCourse: run((id) => api.del(`/courses/${id}`)),
+    addCourses: run((list) => api.post('/courses/bulk', { courses: list })),
 
     // Classes
     addClass: run((v) => api.post('/classes', v)),
@@ -116,7 +116,7 @@ export function useDB(session) {
     dropReg: run((id) => api.del(`/registrations/${id}`)),
 
     // Grades
-    saveGrade: run((studentId, subjectId, midterm, finals) =>
-      api.put('/grades', { studentId, subjectId, midterm, finals })),
+    saveGrade: run((studentId, courseId, midterm, finals) =>
+      api.put('/grades', { studentId, courseId, midterm, finals })),
   };
 }

@@ -5,14 +5,14 @@ const score = { type: Number, min: [1, 'Grades must be 1.00 to 5.00.'], max: [5,
 const gradeSchema = new mongoose.Schema(
   {
     studentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Student', required: true },
-    subjectId: { type: mongoose.Schema.Types.ObjectId, ref: 'Subject', required: true },
+    courseId: { type: mongoose.Schema.Types.ObjectId, ref: 'Course', required: true },
     midterm: score,
     finals: score,
   },
   { toJSON: { virtuals: true }, toObject: { virtuals: true } }
 );
 
-gradeSchema.index({ studentId: 1, subjectId: 1 }, { unique: true });
+gradeSchema.index({ studentId: 1, courseId: 1 }, { unique: true });
 
 // Computed, not stored: average of midterm and finals.
 gradeSchema.virtual('finalRating').get(function () {

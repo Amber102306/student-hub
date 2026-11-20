@@ -1,15 +1,15 @@
- import { useState } from 'react';
+import { useState } from 'react';
 import { LayoutDashboard, User, Book, Calendar, FileText, Printer, AlertTriangle, Lock, Edit2 } from 'lucide-react';
-import { Shell, PageHeader, Badge, Modal, ConfirmModal, Field, EmptyState } from './components';
+import { Shell, PageHeader, Badge, Modal, ConfirmModal, Field, EmptyState, Meetings } from './components';
 import {
-  DAYS, MAX_UNITS, enrich, overlaps, timeRange, toMin, fmtTime, fmtDate, gradeOf, finalRating, remarkOf,
-  daysFromToday, initials, pct,
+  DAYS, MAX_UNITS, dayShort, enrich, classesOverlap, overlapDay, timeRange, toMin, fmtTime, fmtDate, fmtUnits,
+  gradeOf, finalRating, remarkOf, daysFromToday, initials, pct, sortMeetings,
 } from './data';
 
 const NAV = [
   { key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { key: 'profile', label: 'Student Profile', icon: User },
-  { key: 'subjects', label: 'Subject List', icon: Book },
+  { key: 'courses', label: 'Course List', icon: Book },
   { key: 'schedule', label: 'Class Schedule', icon: Calendar },
   { key: 'records', label: 'Academic Records', icon: FileText },
 ];
@@ -23,30 +23,31 @@ export default function StudentPortal({ student, db, theme, toggleTheme, onLogou
   const regs = db.registrations
     .filter((r) => r.studentId === student.id)
     .map((r) => ({ ...r, cls: enrich(db, db.classes.find((c) => c.id === r.classId)) }))
-    .filter((r) => r.cls?.subject);
+    .filter((r) => r.cls?.course);
   const active = regs.filter((r) => r.status !== 'rejected');
-  const approved = regs.filter((r) => r.status === 'approved');
+  const enrolled = regs.filter((r) => r.status === 'enrolled');
   const pending = regs.filter((r) => r.status === 'pending');
-  const unitsLoaded = active.reduce((n, r) => n + r.cls.subject.units, 0);
+  const unitsLoaded = active.reduce((n, r) => n + r.cls.course.units, 0);
+  const weeklyClasses = enrolled.reduce((n, r) => n + r.cls.meetings.length, 0);
 
   const conflicts = [];
-  active.forEach((a, i) => active.slice(i + 1).forEach((b) => overlaps(a.cls, b.cls) && conflicts.push([a, b])));
+  active.forEach((a, i) => active.slice(i + 1).forEach((b) => classesOverlap(a.cls, b.cls) && conflicts.push([a, b])));
   const conflictIds = new Set(conflicts.flat().map((r) => r.id));
 
-  const rated = approved.map((r) => ({ r, rating: finalRating(gradeOf(db.grades, student.id, r.cls.subjectId)) }));
+  const rated = enrolled.map((r) => ({ r, rating: finalRating(gradeOf(db.grades, student.id, r.cls.courseId)) }));
   const posted = rated.filter((x) => x.rating != null);
-  const unitsPosted = posted.reduce((n, x) => n + x.r.cls.subject.units, 0);
-  const gwa = unitsPosted ? posted.reduce((n, x) => n + x.rating * x.r.cls.subject.units, 0) / unitsPosted : null;
+  const unitsPosted = posted.reduce((n, x) => n + x.r.cls.course.units, 0);
+  const gwa = unitsPosted ? posted.reduce((n, x) => n + x.rating * x.r.cls.course.units, 0) / unitsPosted : null;
 
   const hour = new Date().getHours();
   const greeting = hour < 12 ? 'Good Morning' : hour < 18 ? 'Good Afternoon' : 'Good Evening';
 
   // ----- Registering for a class -----
   const blockReason = (c) => {
-    if (active.some((r) => r.cls.subjectId === c.subjectId)) return 'Already registered for this subject.';
-    const clash = active.find((r) => overlaps(r.cls, c));
-    if (clash) return `Overlaps with ${clash.cls.subject.code} on ${clash.cls.day}.`;
-    if (unitsLoaded + c.subject.units > MAX_UNITS) return `Over the ${MAX_UNITS}-unit limit.`;
+    if (active.some((r) => r.cls.courseId === c.courseId)) return 'Already registered for this course.';
+    const clash = active.find((r) => classesOverlap(r.cls, c));
+    if (clash) return `Overlaps with ${clash.cls.course.code} on ${overlapDay(clash.cls, c)}.`;
+    if (unitsLoaded + c.course.units > MAX_UNITS) return `Over the ${MAX_UNITS}-unit limit.`;
     return null;
   };
 
@@ -64,43 +65,43 @@ export default function StudentPortal({ student, db, theme, toggleTheme, onLogou
   const confirmDrop = async () => {
     try {
       await db.dropReg(dropTarget.id);
-      notify(`${dropTarget.cls.subject.code} removed from your list.`);
+      notify(`${dropTarget.cls.course.code} removed from your list.`);
     } catch (err) {
       notify(err.message, 'error');
     }
     setDropTarget(null);
   };
 
-  const available = db.classes.map((c) => enrich(db, c)).filter((c) => c.subject && !active.some((r) => r.classId === c.id));
+  const available = db.classes.map((c) => enrich(db, c)).filter((c) => c.course && !active.some((r) => r.classId === c.id));
 
   // ----- Pages -----
   const renderContent = () => {
     switch (page) {
       case 'dashboard': {
-        const upcoming = approved
-          .slice()
-          .sort((a, b) => daysFromToday(a.cls.day) - daysFromToday(b.cls.day) || toMin(a.cls.start) - toMin(b.cls.start))
+        const upcoming = enrolled
+          .flatMap((r) => r.cls.meetings.map((m) => ({ r, m })))
+          .sort((a, b) => daysFromToday(a.m.day) - daysFromToday(b.m.day) || toMin(a.m.start) - toMin(b.m.start))
           .slice(0, 4);
         return (
           <>
-            <PageHeader title={`${greeting}, ${student.name.split(' ')[0]}`} subtitle={student.course} />
+            <PageHeader title={`${greeting}, ${student.name.split(' ')[0]}`} subtitle={student.program} />
 
             <div className="stats-grid">
               <div className="stat-card">
-                <p className="stat-label">Registered Courses</p>
-                <div className="stat-value">{approved.length} <Badge status="approved">Approved</Badge></div>
+                <p className="stat-label">Enrolled Courses</p>
+                <div className="stat-value">{enrolled.length} <Badge status="enrolled" /></div>
               </div>
               <div className="stat-card">
                 <p className="stat-label">Weekly Classes</p>
-                <div className="stat-value">{approved.length} <span className="stat-badge badge-blue">This week</span></div>
+                <div className="stat-value">{weeklyClasses} <span className="stat-badge badge-blue">This week</span></div>
               </div>
-              <div className="stat-card clickable" role="button" tabIndex={0} onClick={() => setPage('subjects')} onKeyDown={(e) => e.key === 'Enter' && setPage('subjects')}>
+              <div className="stat-card clickable" role="button" tabIndex={0} onClick={() => setPage('courses')} onKeyDown={(e) => e.key === 'Enter' && setPage('courses')}>
                 <p className="stat-label">Pending Registrations</p>
-                <div className="stat-value">{pending.length} <Badge status={pending.length ? 'pending' : 'approved'}>{pending.length ? 'Awaiting approval' : 'All clear'}</Badge></div>
+                <div className="stat-value">{pending.length} <Badge status={pending.length ? 'pending' : 'enrolled'}>{pending.length ? 'Awaiting approval' : 'All clear'}</Badge></div>
               </div>
               <div className="stat-card clickable" role="button" tabIndex={0} onClick={() => setPage('schedule')} onKeyDown={(e) => e.key === 'Enter' && setPage('schedule')}>
                 <p className="stat-label">Schedule Conflicts</p>
-                <div className="stat-value">{conflicts.length} <Badge status={conflicts.length ? 'rejected' : 'approved'}>{conflicts.length ? 'Resolve now' : 'No conflicts'}</Badge></div>
+                <div className="stat-value">{conflicts.length} <Badge status={conflicts.length ? 'rejected' : 'enrolled'}>{conflicts.length ? 'Resolve now' : 'No conflicts'}</Badge></div>
               </div>
             </div>
 
@@ -111,20 +112,20 @@ export default function StudentPortal({ student, db, theme, toggleTheme, onLogou
                   <a href="#" className="link-accent" onClick={(e) => { e.preventDefault(); setPage('schedule'); }}>Full Schedule</a>
                 </div>
                 {upcoming.length === 0 ? (
-                  <EmptyState text="No approved classes yet.">
-                    <button className="btn-primary btn-sm" style={{ margin: '1rem auto 0' }} onClick={() => setPage('subjects')}>Register for classes</button>
+                  <EmptyState text="No enrolled classes yet.">
+                    <button className="btn-primary btn-sm" style={{ margin: '1rem auto 0' }} onClick={() => setPage('courses')}>Register for classes</button>
                   </EmptyState>
                 ) : (
                   <div className="table-scroll">
                     <table>
-                      <thead><tr><th>Day</th><th>Subject</th><th>Time</th><th>Room</th></tr></thead>
+                      <thead><tr><th>Day</th><th>Course</th><th>Time</th><th>Room</th></tr></thead>
                       <tbody>
-                        {upcoming.map((r) => (
-                          <tr key={r.id}>
-                            <td><strong>{r.cls.day}</strong></td>
-                            <td>{r.cls.subject.name}<br /><small className="muted">{r.cls.subject.code}</small></td>
-                            <td>{timeRange(r.cls)}</td>
-                            <td>{r.cls.room}</td>
+                        {upcoming.map(({ r, m }, i) => (
+                          <tr key={`${r.id}-${i}`}>
+                            <td><strong>{dayShort(m.day)}</strong></td>
+                            <td>{r.cls.course.description}<br /><small className="muted">{r.cls.course.code} - {r.cls.section}</small></td>
+                            <td>{timeRange(m)}</td>
+                            <td>{m.room}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -135,9 +136,9 @@ export default function StudentPortal({ student, db, theme, toggleTheme, onLogou
 
               <div className="table-container" style={{ padding: '1.5rem' }}>
                 <h3 style={{ marginBottom: '1.5rem' }}>Semester Progress</h3>
-                <Progress label="Units Loaded" value={`${unitsLoaded}/${MAX_UNITS}`} width={pct(unitsLoaded, MAX_UNITS)} fill="fill-blue" />
-                <Progress label="Registrations Approved" value={`${approved.length}/${active.length}`} width={pct(approved.length, active.length)} fill="fill-navy" />
-                <Progress label="Grades Posted" value={`${posted.length}/${approved.length}`} width={pct(posted.length, approved.length)} fill="fill-green" />
+                <Progress label="Units Loaded" value={`${fmtUnits(unitsLoaded)}/${MAX_UNITS}`} width={pct(unitsLoaded, MAX_UNITS)} fill="fill-blue" />
+                <Progress label="Courses Enrolled" value={`${enrolled.length}/${active.length}`} width={pct(enrolled.length, active.length)} fill="fill-navy" />
+                <Progress label="Grades Posted" value={`${posted.length}/${enrolled.length}`} width={pct(posted.length, enrolled.length)} fill="fill-green" />
                 <div style={{ marginTop: '2rem' }}>
                   <p className="muted" style={{ fontSize: '0.875rem' }}>Current GWA</p>
                   <h2 style={{ fontSize: '2rem' }}>{gwa == null ? '—' : gwa.toFixed(2)}</h2>
@@ -162,8 +163,8 @@ export default function StudentPortal({ student, db, theme, toggleTheme, onLogou
                 <div className="avatar-large">{initials(student.name)}</div>
                 <div>
                   <h3 style={{ fontSize: '1.5rem' }}>{student.name}</h3>
-                  <p className="muted">{student.course.split(' - ')[0]}</p>
-                  <p className="muted">Specialization: {student.course.split(' - ')[1]}</p>
+                  <p className="muted">{student.program}</p>
+                  <p className="muted">{student.studentNo}</p>
                 </div>
               </div>
               <div className="info-grid">
@@ -171,59 +172,69 @@ export default function StudentPortal({ student, db, theme, toggleTheme, onLogou
                 <Info label="Student Number" value={student.studentNo} />
                 <Info label="Phone" value={student.phone || '—'} />
                 <Info label="Date of Birth" value={fmtDate(student.dob)} />
-                <Info label="Units Loaded" value={`${unitsLoaded} of ${MAX_UNITS}`} />
-                <Info label="Registered Subjects" value={approved.length} />
+                <Info label="Units Loaded" value={`${fmtUnits(unitsLoaded)} of ${MAX_UNITS}`} />
+                <Info label="Enrolled Courses" value={enrolled.length} />
               </div>
             </div>
           </>
         );
 
-      case 'subjects':
+      case 'courses':
         return (
           <>
-            <PageHeader title="Subject List" subtitle={`${unitsLoaded} of ${MAX_UNITS} units loaded`} />
+            <PageHeader title="Course List" subtitle={`${fmtUnits(unitsLoaded)} of ${MAX_UNITS} units loaded`} />
 
-            <h3 className="section-title">My Subjects</h3>
-            {regs.length === 0 ? (
-              <div className="table-container"><EmptyState text="You have no subjects yet. Register for a class below." /></div>
-            ) : (
-              <div className="subject-grid">
-                {regs.map((r) => (
-                  <div key={r.id} className="subject-card">
-                    <div className="card-title-row">
-                      <h4 style={{ color: 'var(--btn-primary-bg)' }}>{r.cls.subject.name}</h4>
-                      <Badge status={r.status} />
-                    </div>
-                    <p className="muted" style={{ fontSize: '0.875rem', marginBottom: '1rem' }}>
-                      {r.cls.subject.code} - {r.cls.section} - {r.cls.day} {timeRange(r.cls)}
-                    </p>
-                    <div className="card-title-row muted" style={{ fontSize: '0.875rem' }}>
-                      <span>{r.cls.teacher?.name}</span>
-                      <span>{r.cls.subject.units} Units</span>
-                    </div>
-                    <button className="btn-danger btn-sm" style={{ marginTop: '1rem' }} onClick={() => setDropTarget(r)}>
-                      {r.status === 'rejected' ? 'Remove' : 'Drop'}
-                    </button>
-                  </div>
-                ))}
+            <h3 className="section-title">My Courses</h3>
+            <div className="table-container">
+              <div className="table-scroll">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Course Code</th><th>Course Description</th><th>Section</th><th>Day</th><th>Schedule</th>
+                      <th>Room</th><th>Professor</th><th>Status</th><th>Units</th><th className="no-print">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {regs.map((r) => {
+                      const ms = sortMeetings(r.cls.meetings);
+                      return (
+                        <tr key={r.id}>
+                          <td><strong>{r.cls.course.code}</strong></td>
+                          <td>{r.cls.course.description}</td>
+                          <td>{r.cls.section}</td>
+                          <td><div className="stack">{ms.map((m, i) => <div key={i}>{m.day}</div>)}</div></td>
+                          <td><div className="stack">{ms.map((m, i) => <div key={i}>{timeRange(m)}</div>)}</div></td>
+                          <td><div className="stack">{ms.map((m, i) => <div key={i}>{m.room}</div>)}</div></td>
+                          <td>{r.cls.professor?.name}</td>
+                          <td><Badge status={r.status} /></td>
+                          <td>{fmtUnits(r.cls.course.units)}</td>
+                          <td className="no-print">
+                            <button className="btn-danger btn-sm" onClick={() => setDropTarget(r)}>{r.status === 'rejected' ? 'Remove' : 'Drop'}</button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                {regs.length === 0 && <EmptyState text="You have no courses yet. Register for a class below." />}
               </div>
-            )}
+            </div>
 
             <h3 className="section-title">Available Classes</h3>
             <div className="table-container">
               <div className="table-scroll">
                 <table>
-                  <thead><tr><th>Subject</th><th>Section</th><th>Teacher</th><th>Schedule</th><th>Units</th><th>Action</th></tr></thead>
+                  <thead><tr><th>Course</th><th>Section</th><th>Professor</th><th>Schedule</th><th>Units</th><th>Action</th></tr></thead>
                   <tbody>
                     {available.map((c) => {
                       const reason = blockReason(c);
                       return (
                         <tr key={c.id}>
-                          <td><strong>{c.subject.code}</strong><br /><small className="muted">{c.subject.name}</small></td>
+                          <td><strong>{c.course.code}</strong><br /><small className="muted">{c.course.description}</small></td>
                           <td>{c.section}</td>
-                          <td>{c.teacher?.name}</td>
-                          <td>{c.day} {timeRange(c)}<br /><small className="muted">{c.room}</small></td>
-                          <td>{c.subject.units}</td>
+                          <td>{c.professor?.name}</td>
+                          <td><Meetings meetings={c.meetings} /></td>
+                          <td>{fmtUnits(c.course.units)}</td>
                           <td>
                             <button className="btn-primary btn-sm" disabled={!!reason} onClick={() => register(c)}>Register</button>
                             {reason && <small className="muted block">{reason}</small>}
@@ -240,7 +251,8 @@ export default function StudentPortal({ student, db, theme, toggleTheme, onLogou
         );
 
       case 'schedule': {
-        const starts = [...new Set(active.map((r) => r.cls.start))].sort((a, b) => toMin(a) - toMin(b));
+        const slots = active.flatMap((r) => r.cls.meetings.map((m) => ({ r, m })));
+        const starts = [...new Set(slots.map((x) => x.m.start))].sort((a, b) => toMin(a) - toMin(b));
         return (
           <>
             <PageHeader title="Class Schedule" subtitle="Dashed blocks are waiting for approval.">
@@ -251,13 +263,13 @@ export default function StudentPortal({ student, db, theme, toggleTheme, onLogou
               <div className="alert alert-danger" role="alert">
                 <AlertTriangle size={18} />
                 <div style={{ flex: 1 }}>
-                  <strong>{conflicts.length} schedule conflict(s).</strong> Drop one subject in each pair to fix it.
+                  <strong>{conflicts.length} schedule conflict(s).</strong> Drop one course in each pair to fix it.
                   {conflicts.map(([a, b]) => (
                     <div key={a.id + b.id} className="conflict-row">
-                      <span>{a.cls.subject.code} and {b.cls.subject.code} overlap on {a.cls.day}.</span>
+                      <span>{a.cls.course.code} and {b.cls.course.code} overlap on {overlapDay(a.cls, b.cls)}.</span>
                       <span className="no-print">
-                        <button className="btn-danger btn-sm" onClick={() => setDropTarget(a)}>Drop {a.cls.subject.code}</button>{' '}
-                        <button className="btn-danger btn-sm" onClick={() => setDropTarget(b)}>Drop {b.cls.subject.code}</button>
+                        <button className="btn-danger btn-sm" onClick={() => setDropTarget(a)}>Drop {a.cls.course.code}</button>{' '}
+                        <button className="btn-danger btn-sm" onClick={() => setDropTarget(b)}>Drop {b.cls.course.code}</button>
                       </span>
                     </div>
                   ))}
@@ -266,30 +278,28 @@ export default function StudentPortal({ student, db, theme, toggleTheme, onLogou
             )}
 
             <div className="table-container" style={{ padding: '1.5rem' }}>
-              {active.length === 0 ? (
+              {slots.length === 0 ? (
                 <EmptyState text="Your schedule is empty. Register for classes to see them here." />
               ) : (
                 <div className="table-scroll">
                   <table className="schedule-table">
-                    <thead><tr><th>Time</th>{DAYS.map((d) => <th key={d}>{d}</th>)}</tr></thead>
+                    <thead><tr><th>Time</th>{DAYS.map((d) => <th key={d}>{dayShort(d)}</th>)}</tr></thead>
                     <tbody>
                       {starts.map((s) => (
                         <tr key={s}>
                           <td><strong>{fmtTime(s)}</strong></td>
-                          {DAYS.map((d) => {
-                            const r = active.find((x) => x.cls.day === d && x.cls.start === s);
-                            return (
-                              <td key={d}>
-                                {r && (
-                                  <div className={`schedule-block ${r.status === 'pending' ? 'pending' : ''} ${conflictIds.has(r.id) ? 'conflict' : ''}`}>
-                                    <strong>{r.cls.subject.code}</strong><br />
-                                    {r.cls.subject.name}<br />
-                                    <small>{timeRange(r.cls)} - {r.cls.room}</small>
-                                  </div>
-                                )}
-                              </td>
-                            );
-                          })}
+                          {DAYS.map((d) => (
+                            <td key={d}>
+                              {slots.filter((x) => x.m.day === d && x.m.start === s).map(({ r, m }) => (
+                                <div key={r.id} className={`schedule-block ${r.status === 'pending' ? 'pending' : ''} ${conflictIds.has(r.id) ? 'conflict' : ''}`}>
+                                  <strong>{r.cls.course.code}</strong><br />
+                                  {r.cls.course.description}<br />
+                                  <small>{timeRange(m)} - {m.room}</small><br />
+                                  <small>{r.cls.section}</small>
+                                </div>
+                              ))}
+                            </td>
+                          ))}
                         </tr>
                       ))}
                     </tbody>
@@ -310,16 +320,16 @@ export default function StudentPortal({ student, db, theme, toggleTheme, onLogou
             <div className="table-container">
               <div className="table-scroll">
                 <table>
-                  <thead><tr><th>Subject</th><th>Units</th><th>Midterm Grade</th><th>Finals Grade</th><th>Final Rating</th><th>Remarks</th></tr></thead>
+                  <thead><tr><th>Course</th><th>Units</th><th>Midterm Grade</th><th>Finals Grade</th><th>Final Rating</th><th>Remarks</th></tr></thead>
                   <tbody>
                     {rated.map(({ r, rating }) => {
-                      const g = gradeOf(db.grades, student.id, r.cls.subjectId);
+                      const g = gradeOf(db.grades, student.id, r.cls.courseId);
                       const show = (v) => (v === '' || v == null ? '—' : Number(v).toFixed(2));
                       const remark = remarkOf(rating);
                       return (
                         <tr key={r.id}>
-                          <td>{r.cls.subject.name}<br /><small className="muted">{r.cls.subject.code}</small></td>
-                          <td>{r.cls.subject.units}</td>
+                          <td>{r.cls.course.description}<br /><small className="muted">{r.cls.course.code}</small></td>
+                          <td>{fmtUnits(r.cls.course.units)}</td>
                           <td>{show(g?.midterm)}</td>
                           <td>{show(g?.finals)}</td>
                           <td><strong>{show(rating)}</strong></td>
@@ -334,7 +344,7 @@ export default function StudentPortal({ student, db, theme, toggleTheme, onLogou
                     </tfoot>
                   )}
                 </table>
-                {rated.length === 0 && <EmptyState text="No records yet. Grades appear here after your registrations are approved." />}
+                {rated.length === 0 && <EmptyState text="No records yet. Grades appear here after you are enrolled in a course." />}
               </div>
             </div>
           </>
@@ -347,22 +357,22 @@ export default function StudentPortal({ student, db, theme, toggleTheme, onLogou
 
   return (
     <Shell
-      brand="AttendX Student" userLabel={student.name} sections={[{ items: NAV.map((n) => (n.key === 'subjects' ? { ...n, count: pending.length } : n)) }]}
+      brand="AttendX Student" userLabel={student.name} sections={[{ items: NAV.map((n) => (n.key === 'courses' ? { ...n, count: pending.length } : n)) }]}
       active={page} onNav={setPage} theme={theme} toggleTheme={toggleTheme} onLogout={onLogout}
     >
       {renderContent()}
 
       {dropTarget && (
         <ConfirmModal
-          title={dropTarget.status === 'rejected' ? 'Remove Subject' : 'Drop Subject'}
+          title={dropTarget.status === 'rejected' ? 'Remove Course' : 'Drop Course'}
           confirmLabel={dropTarget.status === 'rejected' ? 'Remove' : 'Drop'}
-          message={<p>Do you want to {dropTarget.status === 'rejected' ? 'remove' : 'drop'} <strong>{dropTarget.cls.subject.code} - {dropTarget.cls.subject.name}</strong>? You can register again later.</p>}
+          message={<p>Do you want to {dropTarget.status === 'rejected' ? 'remove' : 'drop'} <strong>{dropTarget.cls.course.code} - {dropTarget.cls.course.description}</strong>? You can register again later.</p>}
           onConfirm={confirmDrop}
           onClose={() => setDropTarget(null)}
         />
       )}
       {profileModal === 'edit' && <EditProfileModal student={student} db={db} notify={notify} onClose={() => setProfileModal(null)} />}
-      {profileModal === 'password' && <PasswordModal student={student} db={db} notify={notify} onClose={() => setProfileModal(null)} />}
+      {profileModal === 'password' && <PasswordModal db={db} notify={notify} onClose={() => setProfileModal(null)} />}
     </Shell>
   );
 }
@@ -408,7 +418,7 @@ function EditProfileModal({ student, db, notify, onClose }) {
       <form onSubmit={submit}>
         {error && <div className="form-error" role="alert">{error}</div>}
         {fields.map((f) => <Field key={f.name} field={f} value={form[f.name]} onChange={(e) => setForm({ ...form, [e.target.name]: e.target.value })} />)}
-        <p className="form-hint">Email, course and student number can only be changed by the admin.</p>
+        <p className="form-hint">Email, program and student number can only be changed by the admin.</p>
         <div className="modal-actions">
           <button type="button" className="btn-cancel" onClick={onClose}>Cancel</button>
           <button type="submit" className="btn-primary">Save Changes</button>
@@ -418,7 +428,7 @@ function EditProfileModal({ student, db, notify, onClose }) {
   );
 }
 
-function PasswordModal({ student, db, notify, onClose }) {
+function PasswordModal({ db, notify, onClose }) {
   const [form, setForm] = useState({ current: '', next: '', confirm: '' });
   const [error, setError] = useState('');
   const fields = [

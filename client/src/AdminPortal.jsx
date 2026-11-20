@@ -2,10 +2,11 @@ import { useState } from 'react';
 import {
   LayoutDashboard, Users, BookOpen, Book, GraduationCap, ClipboardCheck, Award, Check, X, Edit2, Search,
 } from 'lucide-react';
-import { Shell, PageHeader, Badge, Modal, Field, EmptyState } from './components';
+import { Shell, PageHeader, Badge, Modal, Field, EmptyState, Meetings } from './components';
 import CrudPage from './CrudPage';
 import {
-  COURSES, DAYS, ADMIN, toMin, timeRange, overlaps, fmtDate, gradeOf, finalRating, remarkOf, pct,
+  PROGRAMS, DAYS, ADMIN, SECTION_RE, toMin, timeRange, meetingsOverlap, classesOverlap, fmtDate, fmtUnits,
+  gradeOf, finalRating, remarkOf, pct,
 } from './data';
 
 const EMAIL_RE = /^\S+@\S+\.\S+$/;
@@ -15,13 +16,13 @@ const opts = (list, label) => list.map((x) => ({ value: x.id, label: label(x) })
 export default function AdminPortal({ db, theme, toggleTheme, onLogout, notify }) {
   const [page, setPage] = useState('dashboard');
 
-  const subj = (id) => db.subjects.find((s) => s.id === id);
-  const teacher = (id) => db.teachers.find((t) => t.id === id);
+  const course = (id) => db.courses.find((c) => c.id === id);
+  const professor = (id) => db.professors.find((p) => p.id === id);
   const student = (id) => db.students.find((s) => s.id === id);
   const cls = (id) => db.classes.find((c) => c.id === id);
-  const enrolled = (classId) => db.registrations.filter((r) => r.classId === classId && r.status === 'approved').length;
+  const enrolledCount = (classId) => db.registrations.filter((r) => r.classId === classId && r.status === 'enrolled').length;
   const pending = db.registrations.filter((r) => r.status === 'pending');
-  const classTitle = (c) => `${subj(c.subjectId)?.code} (${c.section})`;
+  const classTitle = (c) => `${course(c.courseId)?.code} (${c.section})`;
 
   const sections = [
     { items: [{ key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard }] },
@@ -29,9 +30,9 @@ export default function AdminPortal({ db, theme, toggleTheme, onLogout, notify }
       label: 'Academics',
       items: [
         { key: 'classes', label: 'Classes', icon: BookOpen },
-        { key: 'teachers', label: 'Teachers', icon: Users },
+        { key: 'professors', label: 'Professors', icon: Users },
         { key: 'students', label: 'Students', icon: GraduationCap },
-        { key: 'subjects', label: 'Subjects', icon: Book },
+        { key: 'courses', label: 'Courses', icon: Book },
       ],
     },
     {
@@ -45,16 +46,16 @@ export default function AdminPortal({ db, theme, toggleTheme, onLogout, notify }
   const title = sections.flatMap((s) => s.items).find((i) => i.key === page).label;
 
   // ----- Registration actions -----
-  const approve = async (r) => {
+  const enroll = async (r) => {
     const target = cls(r.classId);
     const clash = db.registrations
-      .filter((x) => x.studentId === r.studentId && x.status === 'approved' && x.id !== r.id)
+      .filter((x) => x.studentId === r.studentId && x.status === 'enrolled' && x.id !== r.id)
       .map((x) => cls(x.classId))
-      .find((c) => c && overlaps(c, target));
-    if (clash) return notify(`Cannot approve. It overlaps with ${subj(clash.subjectId)?.code} on ${clash.day}.`, 'error');
+      .find((c) => c && classesOverlap(c, target));
+    if (clash) return notify(`Cannot enroll. It overlaps with ${course(clash.courseId)?.code} (${clash.section}).`, 'error');
     try {
-      await db.setRegStatus(r.id, { status: 'approved' });
-      notify('Registration approved.');
+      await db.setRegStatus(r.id, { status: 'enrolled' });
+      notify('Student enrolled.');
     } catch (err) {
       notify(err.message, 'error');
     }
@@ -76,54 +77,75 @@ export default function AdminPortal({ db, theme, toggleTheme, onLogout, notify }
     if (v.phone && !PHONE_RE.test(v.phone)) return 'Phone must have 7 to 15 digits.';
     if (v.dob && (!/^\d{4}-\d{2}-\d{2}$/.test(v.dob) || new Date(v.dob) > new Date()))
       return 'Date of birth must be a past date (YYYY-MM-DD).';
-    if (!COURSES.includes(v.course)) return 'Pick a course from the list.';
+    if (!PROGRAMS.includes(v.program)) return 'Pick a program from the list.';
     return null;
   };
 
-  const validateTeacher = (v, row, batch = []) => {
+  const validateProfessor = (v, row, batch = []) => {
     if (!EMAIL_RE.test(v.email)) return 'Enter a valid email address.';
-    if ([...db.teachers, ...batch].some((t) => t.id !== row?.id && t.email.toLowerCase() === v.email.toLowerCase()))
-      return 'That email is already used by another teacher.';
+    if ([...db.professors, ...batch].some((p) => p.id !== row?.id && p.email.toLowerCase() === v.email.toLowerCase()))
+      return 'That email is already used by another professor.';
     return null;
   };
 
-  const validateSubject = (v, row, batch = []) => {
-    if ([...db.subjects, ...batch].some((s) => s.id !== row?.id && s.code.toLowerCase() === v.code.toLowerCase()))
-      return 'That subject code already exists.';
-    if (!Number.isInteger(v.units) || v.units < 1 || v.units > 6) return 'Units must be a whole number from 1 to 6.';
+  const validateCourse = (v, row, batch = []) => {
+    if ([...db.courses, ...batch].some((c) => c.id !== row?.id && c.code.toLowerCase() === v.code.toLowerCase()))
+      return 'That course code already exists.';
+    if (!(v.units >= 1 && v.units <= 6 && (v.units * 2) % 1 === 0)) return 'Units must be from 1.0 to 6.0 (steps of 0.5).';
     return null;
   };
 
   const validateClass = (v, row) => {
-    if (toMin(v.end) <= toMin(v.start)) return 'End time must be after the start time.';
-    const cand = { ...v, id: row?.id };
+    const section = v.section.toUpperCase();
+    if (!SECTION_RE.test(section)) return 'Section must be 3 letters and 3 numbers, like COM241 or COM242.';
+    if (!v.meetings.length) return 'Add at least one time slot.';
+    for (const m of v.meetings) {
+      if (!m.start || !m.end || !m.room.trim()) return 'Fill in the day, times and room of every time slot.';
+      if (toMin(m.end) <= toMin(m.start)) return `End time must be after the start time (${m.day}).`;
+    }
+    for (let i = 0; i < v.meetings.length; i += 1)
+      for (let j = i + 1; j < v.meetings.length; j += 1)
+        if (meetingsOverlap(v.meetings[i], v.meetings[j])) return 'Two of your time slots overlap each other.';
+
     for (const c of db.classes) {
-      if (c.id === cand.id || !overlaps(c, cand)) continue;
-      const when = `${c.day} ${timeRange(c)}`;
-      if (c.teacherId === v.teacherId) return `Teacher conflict: ${teacher(c.teacherId)?.name} already teaches ${classTitle(c)} on ${when}.`;
-      if (c.room.toLowerCase() === v.room.toLowerCase()) return `Room conflict: ${c.room} is already used by ${classTitle(c)} on ${when}.`;
-      if (c.section.toLowerCase() === v.section.toLowerCase()) return `Section conflict: ${v.section} already has ${classTitle(c)} on ${when}.`;
+      if (c.id === row?.id) continue;
+      for (const a of c.meetings) {
+        for (const b of v.meetings) {
+          if (!meetingsOverlap(a, b)) continue;
+          const where = `${classTitle(c)} on ${a.day} ${timeRange(a)}`;
+          if (c.professorId === v.professorId) return `Professor conflict: ${professor(c.professorId)?.name} already teaches ${where}.`;
+          if (a.room.toLowerCase() === b.room.trim().toLowerCase()) return `Room conflict: ${a.room} is used by ${where}.`;
+          if (c.section === section) return `Section conflict: ${section} already has ${where}.`;
+        }
+      }
     }
     return null;
   };
+
+  const normClass = (v) => ({
+    ...v,
+    section: v.section.toUpperCase(),
+    meetings: v.meetings.map((m) => ({ ...m, room: m.room.trim() })),
+  });
 
   // ----- Pages -----
   const renderPage = () => {
     switch (page) {
       case 'dashboard': {
-        const perDay = DAYS.map((d) => ({ d, n: db.classes.filter((c) => c.day === d).length }));
+        const allMeetings = db.classes.flatMap((c) => c.meetings);
+        const perDay = DAYS.map((d) => ({ d, n: allMeetings.filter((m) => m.day === d).length }));
         const max = Math.max(1, ...perDay.map((x) => x.n));
         return (
           <>
             <div className="stats-grid">
               <div className="stat-card"><p className="stat-label">Students</p><div className="stat-value">{db.students.length}</div></div>
-              <div className="stat-card"><p className="stat-label">Teachers</p><div className="stat-value">{db.teachers.length}</div></div>
-              <div className="stat-card"><p className="stat-label">Classes</p><div className="stat-value">{db.classes.length}</div></div>
+              <div className="stat-card"><p className="stat-label">Professors</p><div className="stat-value">{db.professors.length}</div></div>
+              <div className="stat-card"><p className="stat-label">Courses</p><div className="stat-value">{db.courses.length}</div></div>
               <div className="stat-card clickable" role="button" tabIndex={0} onClick={() => setPage('registrations')} onKeyDown={(e) => e.key === 'Enter' && setPage('registrations')}>
                 <p className="stat-label">Pending Registrations</p>
                 <div className="stat-value">
                   {pending.length}
-                  <Badge status={pending.length ? 'pending' : 'approved'}>{pending.length ? 'Review now' : 'All clear'}</Badge>
+                  <Badge status={pending.length ? 'pending' : 'enrolled'}>{pending.length ? 'Review now' : 'All clear'}</Badge>
                 </div>
               </div>
             </div>
@@ -147,7 +169,7 @@ export default function AdminPortal({ db, theme, toggleTheme, onLogout, notify }
                             <td>{classTitle(cls(r.classId))}</td>
                             <td>
                               <div className="actions-cell">
-                                <button className="action-edit" title="Approve" aria-label="Approve" onClick={() => approve(r)}><Check size={16} /></button>
+                                <button className="action-edit" title="Enroll" aria-label="Enroll" onClick={() => enroll(r)}><Check size={16} /></button>
                                 <button className="action-delete" title="Reject" aria-label="Reject" onClick={() => reject(r)}><X size={16} /></button>
                               </div>
                             </td>
@@ -160,7 +182,7 @@ export default function AdminPortal({ db, theme, toggleTheme, onLogout, notify }
               </div>
 
               <div className="table-container" style={{ padding: '1.5rem' }}>
-                <h3 style={{ marginBottom: '1.5rem' }}>Classes per Day</h3>
+                <h3 style={{ marginBottom: '1.5rem' }}>Class Meetings per Day</h3>
                 {perDay.map(({ d, n }) => (
                   <div className="progress-group" key={d}>
                     <div className="progress-label"><span>{d}</span><span>{n}</span></div>
@@ -178,58 +200,59 @@ export default function AdminPortal({ db, theme, toggleTheme, onLogout, notify }
           <CrudPage
             noun="Class" notify={notify} rows={db.classes}
             nameOf={(c) => classTitle(c)}
-            searchText={(c) => `${subj(c.subjectId)?.code} ${subj(c.subjectId)?.name} ${teacher(c.teacherId)?.name} ${c.section} ${c.room} ${c.day}`}
+            searchText={(c) => `${course(c.courseId)?.code} ${course(c.courseId)?.description} ${professor(c.professorId)?.name} ${c.section} ${c.meetings.map((m) => `${m.day} ${m.room}`).join(' ')}`}
             fields={[
-              { name: 'subjectId', label: 'Subject', type: 'select', options: opts(db.subjects, (s) => `${s.code} - ${s.name}`) },
-              { name: 'teacherId', label: 'Teacher', type: 'select', options: opts(db.teachers, (t) => t.name) },
-              { name: 'section', label: 'Section', placeholder: 'BSIT-3A' },
-              { name: 'day', label: 'Day', type: 'select', options: DAYS.map((d) => ({ value: d, label: d })) },
-              { name: 'start', label: 'Start Time', type: 'time' },
-              { name: 'end', label: 'End Time', type: 'time' },
-              { name: 'room', label: 'Room', placeholder: 'Room 301' },
+              { name: 'courseId', label: 'Course', type: 'select', options: opts(db.courses, (c) => `${c.code} - ${c.description}`) },
+              { name: 'section', label: 'Section', placeholder: 'COM241', hint: 'Examples: COM241, COM242' },
+              { name: 'professorId', label: 'Professor', type: 'select', options: opts(db.professors, (p) => p.name) },
+              {
+                name: 'meetings', label: 'Schedule', type: 'meetings',
+                default: [{ day: 'Monday', start: '', end: '', room: '' }],
+                hint: 'Add one time slot for each meeting in the week. Each slot can have its own time and room.',
+              },
             ]}
             columns={[
-              { label: 'Subject', render: (c) => <><strong>{subj(c.subjectId)?.code}</strong><br /><small className="muted">{subj(c.subjectId)?.name}</small></> },
-              { label: 'Teacher', render: (c) => teacher(c.teacherId)?.name },
+              { label: 'Course Code', render: (c) => <strong>{course(c.courseId)?.code}</strong> },
+              { label: 'Course Description', render: (c) => course(c.courseId)?.description },
               { label: 'Section', render: (c) => c.section },
-              { label: 'Day', render: (c) => c.day },
-              { label: 'Time', render: (c) => timeRange(c) },
-              { label: 'Room', render: (c) => c.room },
-              { label: 'Enrolled', render: (c) => enrolled(c.id) },
+              { label: 'Schedule', render: (c) => <Meetings meetings={c.meetings} /> },
+              { label: 'Professor', render: (c) => professor(c.professorId)?.name },
+              { label: 'Units', render: (c) => fmtUnits(course(c.courseId)?.units ?? 0) },
+              { label: 'Enrolled', render: (c) => enrolledCount(c.id) },
             ]}
             validate={validateClass}
-            onAdd={db.addClass}
-            onEdit={db.editClass}
+            onAdd={(v) => db.addClass(normClass(v))}
+            onEdit={(id, v) => db.editClass(id, normClass(v))}
             onDelete={db.removeClass}
-            deleteNote={(c) => (enrolled(c.id) ? `${enrolled(c.id)} enrolled student(s) will lose this class.` : '')}
+            deleteNote={(c) => (enrolledCount(c.id) ? `${enrolledCount(c.id)} enrolled student(s) will lose this class.` : '')}
           />
         );
 
-      case 'teachers':
+      case 'professors':
         return (
           <CrudPage
-            noun="Teacher" notify={notify} rows={db.teachers}
-            searchText={(t) => `${t.name} ${t.email} ${t.department}`}
+            noun="Professor" notify={notify} rows={db.professors}
+            searchText={(p) => `${p.name} ${p.email} ${p.department}`}
             fields={[
-              { name: 'name', label: 'Full Name', placeholder: 'Prof. Reyes' },
+              { name: 'name', label: 'Full Name', placeholder: 'Mr. Juan A. Dela Cruz', hint: 'Include the title (Mr., Ms., Dr.).' },
               { name: 'email', label: 'School Email', type: 'email' },
               { name: 'department', label: 'Department' },
             ]}
             columns={[
-              { label: 'Name', render: (t) => t.name },
-              { label: 'Email', render: (t) => t.email },
-              { label: 'Department', render: (t) => t.department },
-              { label: 'Classes', render: (t) => db.classes.filter((c) => c.teacherId === t.id).length },
+              { label: 'Name', render: (p) => p.name },
+              { label: 'Email', render: (p) => p.email },
+              { label: 'Department', render: (p) => p.department },
+              { label: 'Classes', render: (p) => db.classes.filter((c) => c.professorId === p.id).length },
             ]}
-            validate={validateTeacher}
-            onAdd={db.addTeacher}
-            onEdit={db.editTeacher}
-            onDelete={db.removeTeacher}
-            canDelete={(t) => {
-              const n = db.classes.filter((c) => c.teacherId === t.id).length;
-              return n ? `${t.name} still teaches ${n} class(es). Reassign or delete those classes first.` : null;
+            validate={validateProfessor}
+            onAdd={db.addProfessor}
+            onEdit={db.editProfessor}
+            onDelete={db.removeProfessor}
+            canDelete={(p) => {
+              const n = db.classes.filter((c) => c.professorId === p.id).length;
+              return n ? `${p.name} still teaches ${n} class(es). Reassign or delete those classes first.` : null;
             }}
-            bulk={{ fields: ['name', 'email', 'department'], hint: 'Full Name, Email, Department', onImport: db.addTeachers }}
+            bulk={{ fields: ['name', 'email', 'department'], hint: 'Full Name, Email, Department', onImport: db.addProfessors }}
           />
         );
 
@@ -237,13 +260,13 @@ export default function AdminPortal({ db, theme, toggleTheme, onLogout, notify }
         return (
           <CrudPage
             noun="Student" notify={notify} rows={db.students}
-            searchText={(s) => `${s.name} ${s.studentNo} ${s.email} ${s.phone} ${s.course}`}
+            searchText={(s) => `${s.name} ${s.studentNo} ${s.email} ${s.phone} ${s.program}`}
             fields={[
               { name: 'name', label: 'Full Name' },
               { name: 'email', label: 'School Email', type: 'email' },
               { name: 'phone', label: 'Phone', optional: true, placeholder: '+639171234567' },
               { name: 'dob', label: 'Date of Birth', type: 'date', optional: true },
-              { name: 'course', label: 'Course', type: 'select', default: COURSES[0], options: COURSES.map((c) => ({ value: c, label: c })) },
+              { name: 'program', label: 'Program', type: 'select', default: PROGRAMS[0], options: PROGRAMS.map((p) => ({ value: p, label: p })) },
             ]}
             columns={[
               { label: 'Student No.', render: (s) => s.studentNo },
@@ -251,7 +274,7 @@ export default function AdminPortal({ db, theme, toggleTheme, onLogout, notify }
               { label: 'Email', render: (s) => s.email },
               { label: 'Phone', render: (s) => s.phone || '—' },
               { label: 'Date of Birth', render: (s) => fmtDate(s.dob) },
-              { label: 'Course', render: (s) => s.course },
+              { label: 'Program', render: (s) => s.program },
             ]}
             validate={validateStudent}
             onAdd={db.addStudent}
@@ -265,47 +288,47 @@ export default function AdminPortal({ db, theme, toggleTheme, onLogout, notify }
               fields: ['name', 'email', 'phone', 'dob'],
               hint: 'Full Name, Email, Phone, Date of Birth (YYYY-MM-DD)',
               note: 'Student numbers are created automatically. The default password is Welcome123.',
-              defaults: { course: COURSES[0] },
+              defaults: { program: PROGRAMS[0] },
               onImport: db.addStudents,
             }}
           />
         );
 
-      case 'subjects':
+      case 'courses':
         return (
           <CrudPage
-            noun="Subject" notify={notify} rows={db.subjects}
-            nameOf={(s) => `${s.code} - ${s.name}`}
-            searchText={(s) => `${s.code} ${s.name}`}
+            noun="Course" notify={notify} rows={db.courses}
+            nameOf={(c) => `${c.code} - ${c.description}`}
+            searchText={(c) => `${c.code} ${c.description}`}
             fields={[
-              { name: 'code', label: 'Subject Code', placeholder: 'IT205' },
-              { name: 'name', label: 'Subject Name' },
-              { name: 'units', label: 'Units', type: 'number', min: 1, max: 6, step: 1, default: 3 },
+              { name: 'code', label: 'Course Code', placeholder: 'CCDIGFOL' },
+              { name: 'description', label: 'Course Description', placeholder: 'INTRODUCTION TO DIGITAL FORENSICS' },
+              { name: 'units', label: 'Units', type: 'number', min: 1, max: 6, step: 0.5, default: 3 },
             ]}
             columns={[
-              { label: 'Code', render: (s) => <strong>{s.code}</strong> },
-              { label: 'Name', render: (s) => s.name },
-              { label: 'Units', render: (s) => s.units },
-              { label: 'Classes', render: (s) => db.classes.filter((c) => c.subjectId === s.id).length },
+              { label: 'Course Code', render: (c) => <strong>{c.code}</strong> },
+              { label: 'Course Description', render: (c) => c.description },
+              { label: 'Units', render: (c) => fmtUnits(c.units) },
+              { label: 'Classes', render: (c) => db.classes.filter((x) => x.courseId === c.id).length },
             ]}
-            validate={validateSubject}
-            onAdd={(v) => db.addSubject({ ...v, code: v.code.toUpperCase() })}
-            onEdit={(id, v) => db.editSubject(id, { ...v, code: v.code.toUpperCase() })}
-            onDelete={db.removeSubject}
-            deleteNote={(s) => {
-              const n = db.classes.filter((c) => c.subjectId === s.id).length;
+            validate={validateCourse}
+            onAdd={(v) => db.addCourse({ ...v, code: v.code.toUpperCase(), description: v.description.toUpperCase() })}
+            onEdit={(id, v) => db.editCourse(id, { ...v, code: v.code.toUpperCase(), description: v.description.toUpperCase() })}
+            onDelete={db.removeCourse}
+            deleteNote={(c) => {
+              const n = db.classes.filter((x) => x.courseId === c.id).length;
               return n ? `Its ${n} class(es), registrations and grades will be removed too.` : '';
             }}
             bulk={{
-              fields: ['code', 'name', 'units'],
-              hint: 'Code, Name, Units',
-              onImport: (list) => db.addSubjects(list.map((s) => ({ ...s, code: s.code.toUpperCase() }))),
+              fields: ['code', 'description', 'units'],
+              hint: 'Course Code, Course Description, Units',
+              onImport: (list) => db.addCourses(list.map((c) => ({ ...c, code: c.code.toUpperCase(), description: c.description.toUpperCase() }))),
             }}
           />
         );
 
       case 'registrations':
-        return <RegistrationsPage db={db} student={student} cls={cls} subj={subj} classTitle={classTitle} approve={approve} reject={reject} />;
+        return <RegistrationsPage db={db} student={student} cls={cls} course={course} professor={professor} enroll={enroll} reject={reject} />;
 
       case 'grades':
         return <GradesPage db={db} notify={notify} />;
@@ -327,7 +350,7 @@ export default function AdminPortal({ db, theme, toggleTheme, onLogout, notify }
 }
 
 // ---------------- Registrations ----------------
-function RegistrationsPage({ db, student, cls, subj, classTitle, approve, reject }) {
+function RegistrationsPage({ db, student, cls, course, professor, enroll, reject }) {
   const [tab, setTab] = useState('pending');
   const count = (s) => db.registrations.filter((r) => s === 'all' || r.status === s).length;
   const rows = db.registrations.filter((r) => tab === 'all' || r.status === tab);
@@ -335,7 +358,7 @@ function RegistrationsPage({ db, student, cls, subj, classTitle, approve, reject
   return (
     <>
       <div className="tabs no-print">
-        {['pending', 'approved', 'rejected', 'all'].map((t) => (
+        {['pending', 'enrolled', 'rejected', 'all'].map((t) => (
           <button key={t} className={`tab ${tab === t ? 'active' : ''}`} onClick={() => setTab(t)}>
             {t.charAt(0).toUpperCase() + t.slice(1)} ({count(t)})
           </button>
@@ -344,20 +367,21 @@ function RegistrationsPage({ db, student, cls, subj, classTitle, approve, reject
       <div className="table-container">
         <div className="table-scroll">
           <table>
-            <thead><tr><th>Student</th><th>Subject</th><th>Class</th><th>Schedule</th><th>Status</th><th>Actions</th></tr></thead>
+            <thead><tr><th>Student</th><th>Course</th><th>Section</th><th>Schedule</th><th>Professor</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
               {rows.map((r) => {
                 const c = cls(r.classId);
                 return (
                   <tr key={r.id}>
                     <td>{student(r.studentId)?.name}<br /><small className="muted">{student(r.studentId)?.studentNo}</small></td>
-                    <td>{subj(c.subjectId)?.name}</td>
-                    <td>{classTitle(c)}</td>
-                    <td>{c.day} {timeRange(c)}</td>
+                    <td><strong>{course(c.courseId)?.code}</strong><br /><small className="muted">{course(c.courseId)?.description}</small></td>
+                    <td>{c.section}</td>
+                    <td><Meetings meetings={c.meetings} /></td>
+                    <td>{professor(c.professorId)?.name}</td>
                     <td><Badge status={r.status} /></td>
                     <td>
                       <div className="actions-cell">
-                        {r.status !== 'approved' && <button className="action-edit" title="Approve" aria-label="Approve" onClick={() => approve(r)}><Check size={16} /></button>}
+                        {r.status !== 'enrolled' && <button className="action-edit" title="Enroll" aria-label="Enroll" onClick={() => enroll(r)}><Check size={16} /></button>}
                         {r.status !== 'rejected' && <button className="action-delete" title="Reject" aria-label="Reject" onClick={() => reject(r)}><X size={16} /></button>}
                       </div>
                     </td>
@@ -382,20 +406,20 @@ function GradesPage({ db, notify }) {
 
   const seen = new Set();
   const rows = [];
-  db.registrations.filter((r) => r.status === 'approved').forEach((r) => {
+  db.registrations.filter((r) => r.status === 'enrolled').forEach((r) => {
     const c = db.classes.find((x) => x.id === r.classId);
-    if (!c || seen.has(`${r.studentId}|${c.subjectId}`)) return;
-    seen.add(`${r.studentId}|${c.subjectId}`);
+    if (!c || seen.has(`${r.studentId}|${c.courseId}`)) return;
+    seen.add(`${r.studentId}|${c.courseId}`);
     rows.push({
-      key: `${r.studentId}|${c.subjectId}`,
+      key: `${r.studentId}|${c.courseId}`,
       student: db.students.find((s) => s.id === r.studentId),
-      subject: db.subjects.find((s) => s.id === c.subjectId),
-      grade: gradeOf(db.grades, r.studentId, c.subjectId),
+      course: db.courses.find((x) => x.id === c.courseId),
+      grade: gradeOf(db.grades, r.studentId, c.courseId),
     });
   });
 
   const q = query.trim().toLowerCase();
-  const shown = rows.filter((x) => !q || `${x.student?.name} ${x.subject?.code} ${x.subject?.name}`.toLowerCase().includes(q));
+  const shown = rows.filter((x) => !q || `${x.student?.name} ${x.course?.code} ${x.course?.description}`.toLowerCase().includes(q));
 
   const fields = [
     { name: 'midterm', label: 'Midterm Grade', type: 'number', min: 1, max: 5, step: 0.25, optional: true, hint: '1.00 is the best. 5.00 is the lowest.' },
@@ -413,7 +437,7 @@ function GradesPage({ db, notify }) {
     const vals = ['midterm', 'finals'].map((k) => (form[k] === '' ? '' : Number(form[k])));
     if (vals.some((v) => v !== '' && (Number.isNaN(v) || v < 1 || v > 5))) return setError('Grades must be from 1.00 to 5.00.');
     try {
-      await db.saveGrade(editing.student.id, editing.subject.id, vals[0], vals[1]);
+      await db.saveGrade(editing.student.id, editing.course.id, vals[0], vals[1]);
       notify('Grades saved.');
       setEditing(null);
     } catch (err) {
@@ -425,24 +449,25 @@ function GradesPage({ db, notify }) {
     <>
       <div className="toolbar no-print">
         <div className="search-bar">
-          <input type="text" placeholder="Search student or subject..." aria-label="Search grades" value={query} onChange={(e) => setQuery(e.target.value)} />
+          <input type="text" placeholder="Search student or course..." aria-label="Search grades" value={query} onChange={(e) => setQuery(e.target.value)} />
           <div className="btn-icon"><Search size={18} /></div>
         </div>
       </div>
       <div className="table-container">
         <div className="table-scroll">
           <table>
-            <thead><tr><th>Student</th><th>Subject</th><th>Midterm</th><th>Finals</th><th>Final Rating</th><th>Remarks</th><th>Actions</th></tr></thead>
+            <thead><tr><th>Student</th><th>Course</th><th>Midterm</th><th>Finals</th><th>Final Rating</th><th>Remarks</th><th>Actions</th></tr></thead>
             <tbody>
               {shown.map((x) => {
                 const rating = finalRating(x.grade);
                 const remark = remarkOf(rating);
+                const show = (v) => (v === '' || v == null ? '—' : Number(v).toFixed(2));
                 return (
                   <tr key={x.key}>
                     <td>{x.student?.name}</td>
-                    <td>{x.subject?.code} <small className="muted">{x.subject?.name}</small></td>
-                    <td>{x.grade?.midterm === '' || x.grade == null ? '—' : Number(x.grade.midterm).toFixed(2)}</td>
-                    <td>{x.grade?.finals === '' || x.grade == null ? '—' : Number(x.grade.finals).toFixed(2)}</td>
+                    <td><strong>{x.course?.code}</strong><br /><small className="muted">{x.course?.description}</small></td>
+                    <td>{show(x.grade?.midterm)}</td>
+                    <td>{show(x.grade?.finals)}</td>
                     <td><strong>{rating == null ? '—' : rating.toFixed(2)}</strong></td>
                     <td>{remark ? <Badge status={remark} /> : '—'}</td>
                     <td><div className="actions-cell"><button className="action-edit" title="Edit grades" aria-label="Edit grades" onClick={() => openEdit(x)}><Edit2 size={16} /></button></div></td>
@@ -451,14 +476,14 @@ function GradesPage({ db, notify }) {
               })}
             </tbody>
           </table>
-          {shown.length === 0 && <EmptyState text="No approved registrations yet. Approve a registration to enter grades." />}
+          {shown.length === 0 && <EmptyState text="No enrolled students yet. Enroll a student to enter grades." />}
         </div>
       </div>
 
       {editing && (
         <Modal title={`Grades: ${editing.student.name}`} onClose={() => setEditing(null)}>
           <form onSubmit={save}>
-            <p style={{ marginBottom: '1rem' }}>{editing.subject.code} - {editing.subject.name}</p>
+            <p style={{ marginBottom: '1rem' }}>{editing.course.code} - {editing.course.description}</p>
             {error && <div className="form-error" role="alert">{error}</div>}
             {fields.map((f) => <Field key={f.name} field={f} value={form[f.name]} onChange={(e) => setForm({ ...form, [e.target.name]: e.target.value })} />)}
             <div className="modal-actions">

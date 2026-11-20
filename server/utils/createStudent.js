@@ -11,7 +11,7 @@ export const nextStudentNo = async () => {
 };
 
 // Makes the login (User) and the profile (Student) together.
-export default async function createStudent({ name, email, phone, dob, course, password }) {
+export default async function createStudent({ name, email, phone, dob, program, password }) {
   const mail = String(email || '').trim().toLowerCase();
   if (!/^\S+@\S+\.\S+$/.test(mail)) throw new HttpError(400, 'Enter a valid email address.');
   if (!name?.trim()) throw new HttpError(400, 'Name is required.');
@@ -30,7 +30,7 @@ export default async function createStudent({ name, email, phone, dob, course, p
       name: name.trim(),
       phone: phone || undefined,
       dob: dob || undefined,
-      course,
+      program,
     });
   } catch (err) {
     await User.deleteOne({ _id: user._id }); // undo the login if the profile fails

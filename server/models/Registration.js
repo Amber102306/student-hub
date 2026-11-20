@@ -4,7 +4,7 @@ const registrationSchema = new mongoose.Schema(
   {
     studentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Student', required: true },
     classId: { type: mongoose.Schema.Types.ObjectId, ref: 'Class', required: true },
-    status: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending' },
+    status: { type: String, enum: ['pending', 'enrolled', 'rejected'], default: 'pending' },
   },
   { timestamps: true }
 );

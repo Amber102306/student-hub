@@ -38,7 +38,9 @@ export default function CrudPage({
   const start = (current - 1) * PAGE_SIZE;
   const visible = filtered.slice(start, start + PAGE_SIZE);
 
-  const blank = () => Object.fromEntries(fields.map((f) => [f.name, f.default ?? '']));
+  const blank = () =>
+    Object.fromEntries(fields.map((f) => [f.name, f.default === undefined ? '' : JSON.parse(JSON.stringify(f.default))]));
+  const wide = fields.some((f) => f.type === 'meetings');
   const clean = (values) =>
     Object.fromEntries(
       fields.map((f) => {
@@ -189,7 +191,7 @@ export default function CrudPage({
       </div>
 
       {(modal?.type === 'add' || modal?.type === 'edit') && (
-        <Modal title={`${modal.type === 'add' ? 'Add New' : 'Edit'} ${noun}`} onClose={close}>
+        <Modal title={`${modal.type === 'add' ? 'Add New' : 'Edit'} ${noun}`} onClose={close} wide={wide}>
           <form onSubmit={submit}>
             {error && <div className="form-error" role="alert">{error}</div>}
             {fields.map((f) => <Field key={f.name} field={f} value={form[f.name]} onChange={change} />)}
