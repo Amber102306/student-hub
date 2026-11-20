@@ -2,7 +2,7 @@ import { useState } from 'react';
 import {
   LayoutDashboard, Users, BookOpen, Book, GraduationCap, ClipboardCheck, Award, Check, X, Edit2, Search,
 } from 'lucide-react';
-import { Shell, PageHeader, Badge, Modal, Field, EmptyState, Meetings } from './components';
+import { Shell, PageHeader, Badge, Modal, Field, EmptyState, Meetings, Group, GroupToolbar, useGroups } from './components';
 import CrudPage from './CrudPage';
 import {
   PROGRAMS, DAYS, ADMIN, SECTION_RE, toMin, timeRange, meetingsOverlap, classesOverlap, fmtDate, fmtUnits,
@@ -212,14 +212,22 @@ export default function AdminPortal({ db, theme, toggleTheme, onLogout, notify }
               },
             ]}
             columns={[
-              { label: 'Course Code', render: (c) => <strong>{course(c.courseId)?.code}</strong> },
-              { label: 'Course Description', render: (c) => course(c.courseId)?.description },
-              { label: 'Section', render: (c) => c.section },
+              { label: 'Section', render: (c) => <strong>{c.section}</strong> },
               { label: 'Schedule', render: (c) => <Meetings meetings={c.meetings} /> },
               { label: 'Professor', render: (c) => professor(c.professorId)?.name },
-              { label: 'Units', render: (c) => fmtUnits(course(c.courseId)?.units ?? 0) },
               { label: 'Enrolled', render: (c) => enrolledCount(c.id) },
             ]}
+            groupBy={{
+              keyOf: (c) => c.courseId,
+              title: (id) => (course(id) ? `${course(id).code} - ${course(id).description}` : 'Unknown course'),
+              subtitle: (id) => `${fmtUnits(course(id)?.units ?? 0)} units`,
+              meta: (id, list) => (
+                <>
+                  <span className="count-pill">{list.length} section(s)</span>
+                  <span className="count-pill">{list.reduce((n, c) => n + enrolledCount(c.id), 0)} enrolled</span>
+                </>
+              ),
+            }}
             validate={validateClass}
             onAdd={(v) => db.addClass(normClass(v))}
             onEdit={(id, v) => db.editClass(id, normClass(v))}
@@ -232,16 +240,14 @@ export default function AdminPortal({ db, theme, toggleTheme, onLogout, notify }
         return (
           <CrudPage
             noun="Professor" notify={notify} rows={db.professors}
-            searchText={(p) => `${p.name} ${p.email} ${p.department}`}
+            searchText={(p) => `${p.name} ${p.email}`}
             fields={[
-              { name: 'name', label: 'Full Name', placeholder: 'Mr. Juan A. Dela Cruz', hint: 'Include the title (Mr., Ms., Dr.).' },
+              { name: 'name', label: 'Full Name', placeholder: 'Juan A. Dela Cruz' },
               { name: 'email', label: 'School Email', type: 'email' },
-              { name: 'department', label: 'Department' },
             ]}
             columns={[
               { label: 'Name', render: (p) => p.name },
               { label: 'Email', render: (p) => p.email },
-              { label: 'Department', render: (p) => p.department },
               { label: 'Classes', render: (p) => db.classes.filter((c) => c.professorId === p.id).length },
             ]}
             validate={validateProfessor}
@@ -252,7 +258,7 @@ export default function AdminPortal({ db, theme, toggleTheme, onLogout, notify }
               const n = db.classes.filter((c) => c.professorId === p.id).length;
               return n ? `${p.name} still teaches ${n} class(es). Reassign or delete those classes first.` : null;
             }}
-            bulk={{ fields: ['name', 'email', 'department'], hint: 'Full Name, Email, Department', onImport: db.addProfessors }}
+            bulk={{ fields: ['name', 'email'], hint: 'Full Name, Email', onImport: db.addProfessors }}
           />
         );
 
@@ -274,8 +280,8 @@ export default function AdminPortal({ db, theme, toggleTheme, onLogout, notify }
               { label: 'Email', render: (s) => s.email },
               { label: 'Phone', render: (s) => s.phone || '—' },
               { label: 'Date of Birth', render: (s) => fmtDate(s.dob) },
-              { label: 'Program', render: (s) => s.program },
             ]}
+            groupBy={{ keyOf: (s) => s.program, title: (p) => p }}
             validate={validateStudent}
             onAdd={db.addStudent}
             onEdit={db.editStudent}
@@ -287,7 +293,7 @@ export default function AdminPortal({ db, theme, toggleTheme, onLogout, notify }
             bulk={{
               fields: ['name', 'email', 'phone', 'dob'],
               hint: 'Full Name, Email, Phone, Date of Birth (YYYY-MM-DD)',
-              note: 'Student numbers are created automatically. The default password is Welcome123.',
+              note: 'Student numbers are made automatically. The default password is Welcome123.',
               defaults: { program: PROGRAMS[0] },
               onImport: db.addStudents,
             }}
@@ -349,10 +355,10 @@ export default function AdminPortal({ db, theme, toggleTheme, onLogout, notify }
   );
 }
 
-// ---------------- Registrations ----------------
+// ---------------- Registrations (grouped by course) ----------------
 function RegistrationsPage({ db, student, cls, course, professor, enroll, reject }) {
   const [tab, setTab] = useState('pending');
-  const count = (s) => db.registrations.filter((r) => s === 'all' || r.status === s).length;
+  const count = (st) => db.registrations.filter((r) => st === 'all' || r.status === st).length;
   const rows = db.registrations.filter((r) => tab === 'all' || r.status === tab);
 
   return (
@@ -364,46 +370,92 @@ function RegistrationsPage({ db, student, cls, course, professor, enroll, reject
           </button>
         ))}
       </div>
-      <div className="table-container">
-        <div className="table-scroll">
-          <table>
-            <thead><tr><th>Student</th><th>Course</th><th>Section</th><th>Schedule</th><th>Professor</th><th>Status</th><th>Actions</th></tr></thead>
-            <tbody>
-              {rows.map((r) => {
-                const c = cls(r.classId);
-                return (
-                  <tr key={r.id}>
-                    <td>{student(r.studentId)?.name}<br /><small className="muted">{student(r.studentId)?.studentNo}</small></td>
-                    <td><strong>{course(c.courseId)?.code}</strong><br /><small className="muted">{course(c.courseId)?.description}</small></td>
-                    <td>{c.section}</td>
-                    <td><Meetings meetings={c.meetings} /></td>
-                    <td>{professor(c.professorId)?.name}</td>
-                    <td><Badge status={r.status} /></td>
-                    <td>
-                      <div className="actions-cell">
-                        {r.status !== 'enrolled' && <button className="action-edit" title="Enroll" aria-label="Enroll" onClick={() => enroll(r)}><Check size={16} /></button>}
-                        {r.status !== 'rejected' && <button className="action-delete" title="Reject" aria-label="Reject" onClick={() => reject(r)}><X size={16} /></button>}
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          {rows.length === 0 && <EmptyState text={`No ${tab === 'all' ? '' : tab + ' '}registrations.`} />}
-        </div>
-      </div>
+      {/* key={tab}: groups start fresh when the tab changes. Pending groups start open. */}
+      <RegistrationGroups
+        key={tab} tab={tab} rows={rows} defaultOpen={tab === 'pending'}
+        student={student} cls={cls} course={course} professor={professor} enroll={enroll} reject={reject}
+      />
     </>
   );
 }
 
-// ---------------- Grades ----------------
+function RegistrationGroups({ tab, rows, defaultOpen, student, cls, course, professor, enroll, reject }) {
+  const ui = useGroups(defaultOpen);
+
+  const byCourse = {};
+  rows.forEach((r) => {
+    const c = cls(r.classId);
+    if (c) (byCourse[c.courseId] ||= []).push({ r, c });
+  });
+  const groups = Object.entries(byCourse)
+    .map(([id, items]) => ({ id, course: course(id), items }))
+    .sort((a, b) => (a.course?.code || '').localeCompare(b.course?.code || ''));
+  const keys = groups.map((g) => g.id);
+
+  if (!groups.length)
+    return <div className="table-container"><EmptyState text={`No ${tab === 'all' ? '' : `${tab} `}registrations.`} /></div>;
+
+  return (
+    <>
+      <GroupToolbar
+        label={`${rows.length} registration(s) in ${groups.length} course(s)`}
+        onExpand={() => ui.setAll(keys, true)}
+        onCollapse={() => ui.setAll(keys, false)}
+      />
+      {groups.map((g) => {
+        const pendingCount = g.items.filter((x) => x.r.status === 'pending').length;
+        return (
+          <Group
+            key={g.id}
+            title={`${g.course?.code} - ${g.course?.description}`}
+            subtitle={`${fmtUnits(g.course?.units ?? 0)} units`}
+            meta={
+              <>
+                {pendingCount > 0 && <Badge status="pending">{pendingCount} pending</Badge>}
+                <span className="count-pill">{g.items.length} total</span>
+              </>
+            }
+            open={ui.isOpen(g.id)}
+            onToggle={() => ui.toggle(g.id)}
+          >
+            <div className="table-scroll">
+              <table>
+                <thead><tr><th>Student</th><th>Section</th><th>Schedule</th><th>Professor</th><th>Status</th><th>Actions</th></tr></thead>
+                <tbody>
+                  {g.items.map(({ r, c }) => (
+                    <tr key={r.id}>
+                      <td>{student(r.studentId)?.name}<br /><small className="muted">{student(r.studentId)?.studentNo}</small></td>
+                      <td>{c.section}</td>
+                      <td><Meetings meetings={c.meetings} /></td>
+                      <td>{professor(c.professorId)?.name}</td>
+                      <td><Badge status={r.status} /></td>
+                      <td>
+                        <div className="actions-cell">
+                          {r.status !== 'enrolled' && <button className="action-edit" title="Enroll" aria-label="Enroll" onClick={() => enroll(r)}><Check size={16} /></button>}
+                          {r.status !== 'rejected' && <button className="action-delete" title="Reject" aria-label="Reject" onClick={() => reject(r)}><X size={16} /></button>}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Group>
+        );
+      })}
+    </>
+  );
+}
+
+// ---------------- Grades (grouped by student) ----------------
 function GradesPage({ db, notify }) {
   const [query, setQuery] = useState('');
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState({ midterm: '', finals: '' });
   const [error, setError] = useState('');
+  const ui = useGroups(false);
 
+  // One row per student + course the student is enrolled in.
   const seen = new Set();
   const rows = [];
   db.registrations.filter((r) => r.status === 'enrolled').forEach((r) => {
@@ -419,7 +471,30 @@ function GradesPage({ db, notify }) {
   });
 
   const q = query.trim().toLowerCase();
-  const shown = rows.filter((x) => !q || `${x.student?.name} ${x.course?.code} ${x.course?.description}`.toLowerCase().includes(q));
+  const shown = rows.filter((x) => !q || `${x.student?.name} ${x.student?.studentNo} ${x.course?.code} ${x.course?.description}`.toLowerCase().includes(q));
+
+  // Program -> students -> their courses
+  const byStudent = {};
+  shown.forEach((x) => { if (x.student) (byStudent[x.student.id] ||= { student: x.student, items: [] }).items.push(x); });
+
+  const gwaOf = (items) => {
+    const done = items.map((x) => ({ r: finalRating(x.grade), u: x.course?.units ?? 0 })).filter((x) => x.r != null);
+    const units = done.reduce((n, x) => n + x.u, 0);
+    return units ? done.reduce((n, x) => n + x.r * x.u, 0) / units : null;
+  };
+
+  const byProgram = {};
+  Object.values(byStudent)
+    .sort((a, b) => a.student.name.localeCompare(b.student.name))
+    .forEach((g) => (byProgram[g.student.program] ||= []).push({ ...g, gwa: gwaOf(g.items) }));
+  const programs = Object.entries(byProgram)
+    .map(([program, students]) => {
+      const gwas = students.map((x) => x.gwa).filter((v) => v != null);
+      return { program, students, avg: gwas.length ? gwas.reduce((n, v) => n + v, 0) / gwas.length : null };
+    })
+    .sort((a, b) => a.program.localeCompare(b.program));
+  const keys = programs.flatMap((p) => [`p:${p.program}`, ...p.students.map((x) => x.student.id)]);
+  const studentCount = programs.reduce((n, p) => n + p.students.length, 0);
 
   const fields = [
     { name: 'midterm', label: 'Midterm Grade', type: 'number', min: 1, max: 5, step: 0.25, optional: true, hint: '1.00 is the best. 5.00 is the lowest.' },
@@ -445,6 +520,8 @@ function GradesPage({ db, notify }) {
     }
   };
 
+  const show = (v) => (v === '' || v == null ? '—' : Number(v).toFixed(2));
+
   return (
     <>
       <div className="toolbar no-print">
@@ -453,32 +530,73 @@ function GradesPage({ db, notify }) {
           <div className="btn-icon"><Search size={18} /></div>
         </div>
       </div>
-      <div className="table-container">
-        <div className="table-scroll">
-          <table>
-            <thead><tr><th>Student</th><th>Course</th><th>Midterm</th><th>Finals</th><th>Final Rating</th><th>Remarks</th><th>Actions</th></tr></thead>
-            <tbody>
-              {shown.map((x) => {
-                const rating = finalRating(x.grade);
-                const remark = remarkOf(rating);
-                const show = (v) => (v === '' || v == null ? '—' : Number(v).toFixed(2));
+
+      {programs.length === 0 ? (
+        <div className="table-container"><EmptyState text="No enrolled students yet. Enroll a student to enter grades." /></div>
+      ) : (
+        <>
+          <GroupToolbar
+            label={`${studentCount} student(s) in ${programs.length} program(s)`}
+            onExpand={() => ui.setAll(keys, true)}
+            onCollapse={() => ui.setAll(keys, false)}
+          />
+          {programs.map(({ program, students, avg }) => (
+            <Group
+              key={program}
+              title={program}
+              meta={
+                <>
+                  <span className="count-pill">{students.length} student(s)</span>
+                  {avg != null && <span className="count-pill">Avg GWA {avg.toFixed(2)}</span>}
+                </>
+              }
+              open={q ? true : ui.isOpen(`p:${program}`)}
+              onToggle={() => ui.toggle(`p:${program}`)}
+            >
+              {students.map(({ student: st, items, gwa }) => {
+                const graded = items.filter((x) => finalRating(x.grade) != null).length;
                 return (
-                  <tr key={x.key}>
-                    <td>{x.student?.name}</td>
-                    <td><strong>{x.course?.code}</strong><br /><small className="muted">{x.course?.description}</small></td>
-                    <td>{show(x.grade?.midterm)}</td>
-                    <td>{show(x.grade?.finals)}</td>
-                    <td><strong>{rating == null ? '—' : rating.toFixed(2)}</strong></td>
-                    <td>{remark ? <Badge status={remark} /> : '—'}</td>
-                    <td><div className="actions-cell"><button className="action-edit" title="Edit grades" aria-label="Edit grades" onClick={() => openEdit(x)}><Edit2 size={16} /></button></div></td>
-                  </tr>
+                  <Group
+                    key={st.id}
+                    title={st.name}
+                    subtitle={st.studentNo}
+                    meta={
+                      <>
+                        <span className="count-pill">{graded}/{items.length} graded</span>
+                        {gwa != null && <span className="count-pill">GWA {gwa.toFixed(2)}</span>}
+                      </>
+                    }
+                    open={q ? true : ui.isOpen(st.id)}
+                    onToggle={() => ui.toggle(st.id)}
+                  >
+                    <div className="table-scroll">
+                      <table>
+                        <thead><tr><th>Course</th><th>Midterm</th><th>Finals</th><th>Final Rating</th><th>Remarks</th><th>Actions</th></tr></thead>
+                        <tbody>
+                          {items.map((x) => {
+                            const rating = finalRating(x.grade);
+                            const remark = remarkOf(rating);
+                            return (
+                              <tr key={x.key}>
+                                <td><strong>{x.course?.code}</strong><br /><small className="muted">{x.course?.description}</small></td>
+                                <td>{show(x.grade?.midterm)}</td>
+                                <td>{show(x.grade?.finals)}</td>
+                                <td><strong>{rating == null ? '—' : rating.toFixed(2)}</strong></td>
+                                <td>{remark ? <Badge status={remark} /> : '—'}</td>
+                                <td><div className="actions-cell"><button className="action-edit" title="Edit grades" aria-label="Edit grades" onClick={() => openEdit(x)}><Edit2 size={16} /></button></div></td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </Group>
                 );
               })}
-            </tbody>
-          </table>
-          {shown.length === 0 && <EmptyState text="No enrolled students yet. Enroll a student to enter grades." />}
-        </div>
-      </div>
+            </Group>
+          ))}
+        </>
+      )}
 
       {editing && (
         <Modal title={`Grades: ${editing.student.name}`} onClose={() => setEditing(null)}>

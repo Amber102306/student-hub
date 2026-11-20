@@ -10,8 +10,8 @@ export const getProfessors = asyncHandler(async (req, res) => {
 
 // POST /api/professors
 export const createProfessor = asyncHandler(async (req, res) => {
-  const { name, email, department } = req.body;
-  res.status(201).json(await Professor.create({ name, email, department }));
+  const { name, email } = req.body;
+  res.status(201).json(await Professor.create({ name, email }));
 });
 
 // POST /api/professors/bulk  body: { professors: [...] }
@@ -22,7 +22,7 @@ export const bulkCreateProfessors = asyncHandler(async (req, res) => {
   let created = 0;
   for (const [i, p] of professors.entries()) {
     try {
-      await Professor.create({ name: p.name, email: p.email, department: p.department });
+      await Professor.create({ name: p.name, email: p.email });
       created += 1;
     } catch (err) {
       skipped.push({ row: i + 1, reason: err.message });
@@ -33,10 +33,10 @@ export const bulkCreateProfessors = asyncHandler(async (req, res) => {
 
 // PUT /api/professors/:id
 export const updateProfessor = asyncHandler(async (req, res) => {
-  const { name, email, department } = req.body;
+  const { name, email } = req.body;
   const professor = await Professor.findById(req.params.id);
   if (!professor) throw new HttpError(404, 'Professor not found.');
-  Object.assign(professor, { name, email, department });
+  Object.assign(professor, { name, email });
   await professor.save();
   res.json(professor);
 });

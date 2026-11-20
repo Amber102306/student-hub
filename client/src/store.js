@@ -10,7 +10,7 @@ const toStudent = (s, email) => ({
   id: s._id, studentNo: s.studentNo, name: s.name, email: s.email ?? email ?? '',
   phone: s.phone || '', dob: s.dob ? s.dob.slice(0, 10) : '', program: s.program,
 });
-const toProfessor = (p) => ({ id: p._id, name: p.name, email: p.email, department: p.department });
+const toProfessor = (p) => ({ id: p._id, name: p.name, email: p.email });
 const toCourse = (c) => ({ id: c._id, code: c.code, description: c.description, units: c.units });
 const toClass = (c) => ({
   id: c._id, courseId: idOf(c.courseId), professorId: idOf(c.professorId), section: c.section,

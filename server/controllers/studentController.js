@@ -39,7 +39,7 @@ export const bulkCreateStudents = asyncHandler(async (req, res) => {
 
 // PUT /api/students/:id  (admin edits)
 export const updateStudent = asyncHandler(async (req, res) => {
-  const { name, phone, dob, program, email } = req.body;
+  const { name, phone, dob, program, email } = req.body; // the student number can never be changed
   const student = await Student.findById(req.params.id);
   if (!student) throw new HttpError(404, 'Student not found.');
   if (email) {

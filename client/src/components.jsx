@@ -34,6 +34,45 @@ export function ConfirmModal({ title, message, confirmLabel = 'Delete', danger =
   );
 }
 
+// ----- Collapsible groups (dropdown sections) -----
+// useGroups keeps track of which groups are open. defaultOpen decides the start state.
+export function useGroups(defaultOpen = false) {
+  const [state, setState] = useState({});
+  return {
+    isOpen: (k) => state[k] ?? defaultOpen,
+    toggle: (k) => setState((s) => ({ ...s, [k]: !(s[k] ?? defaultOpen) })),
+    setAll: (keys, value) => setState(Object.fromEntries(keys.map((k) => [k, value]))),
+  };
+}
+
+export function Group({ title, subtitle, meta, open, onToggle, children }) {
+  return (
+    <section className="group">
+      <button type="button" className="group-header" aria-expanded={open} onClick={onToggle}>
+        <ChevronDown size={18} className="group-chevron" style={{ transform: open ? 'none' : 'rotate(-90deg)' }} />
+        <span className="group-title">
+          <strong>{title}</strong>
+          {subtitle && <small className="muted">{subtitle}</small>}
+        </span>
+        <span className="group-meta">{meta}</span>
+      </button>
+      {open && <div className="group-body">{children}</div>}
+    </section>
+  );
+}
+
+export function GroupToolbar({ label, onExpand, onCollapse }) {
+  return (
+    <div className="group-toolbar no-print">
+      <span className="muted">{label}</span>
+      <span>
+        <button type="button" className="link-btn" onClick={onExpand}>Expand all</button>
+        <button type="button" className="link-btn" onClick={onCollapse}>Collapse all</button>
+      </span>
+    </div>
+  );
+}
+
 // Shows every time slot of a class, one per line: "Mon 01:00PM - 03:00PM - 409MB"
 export function Meetings({ meetings, rooms = true }) {
   return (

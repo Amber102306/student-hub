@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Search, Plus, Upload, Edit2, Trash2, ChevronLeft, ChevronRight } from 'lucide-react';
-import { Modal, ConfirmModal, Field, EmptyState } from './components';
+import { Modal, ConfirmModal, Field, EmptyState, Group, GroupToolbar, useGroups } from './components';
 
 const PAGE_SIZE = 8;
 
@@ -18,11 +18,13 @@ const PAGE_SIZE = 8;
     deleteNote  (row) => extra warning text
     nameOf      (row) => name shown in the delete message
     bulk        { fields: [names in CSV order], hint, defaults, onImport(list) }
+    groupBy     { keyOf(row), title(key), subtitle?(key), meta?(key, rows) } shows rows in dropdown groups
 */
 export default function CrudPage({
   noun, rows, columns, fields, searchText, onAdd, onEdit, onDelete,
-  validate, canDelete, deleteNote, nameOf = (r) => r.name, bulk, notify,
+  validate, canDelete, deleteNote, nameOf = (r) => r.name, bulk, groupBy, notify,
 }) {
+  const ui = useGroups(false);
   const [query, setQuery] = useState('');
   const [page, setPage] = useState(1);
   const [modal, setModal] = useState(null); // { type: 'add' | 'edit' | 'delete' | 'bulk', row }
@@ -128,6 +130,49 @@ export default function CrudPage({
 
   const blocked = modal?.type === 'delete' ? canDelete?.(modal.row) : null;
 
+  // One table. Used for the whole list, or for one group.
+  const renderTable = (list, offset = 0) => (
+    <div className="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>#</th>
+            {columns.map((c) => <th key={c.label}>{c.label}</th>)}
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {list.map((row, i) => (
+            <tr key={row.id}>
+              <td>{offset + i + 1}</td>
+              {columns.map((c) => <td key={c.label}>{c.render(row)}</td>)}
+              <td>
+                <div className="actions-cell">
+                  <button className="action-edit" title="Edit" aria-label={`Edit ${nameOf(row)}`} onClick={() => open('edit', row)}><Edit2 size={16} /></button>
+                  <button className="action-delete" title="Delete" aria-label={`Delete ${nameOf(row)}`} onClick={() => open('delete', row)}><Trash2 size={16} /></button>
+                </div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+
+  const emptyText = q ? 'No results. Try a different search.' : `No ${noun.toLowerCase()}s yet. Click "Add New" to create one.`;
+
+  const groupList = groupBy
+    ? Object.entries(
+        filtered.reduce((m, r) => {
+          (m[groupBy.keyOf(r)] ||= []).push(r);
+          return m;
+        }, {})
+      )
+        .map(([key, list]) => ({ key, list, title: groupBy.title(key) }))
+        .sort((a, b) => a.title.localeCompare(b.title))
+    : [];
+  const groupKeys = groupList.map((g) => g.key);
+
   return (
     <>
       <div className="toolbar no-print">
@@ -147,48 +192,43 @@ export default function CrudPage({
         </div>
       </div>
 
-      <div className="table-container">
-        <div className="table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>#</th>
-                {columns.map((c) => <th key={c.label}>{c.label}</th>)}
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {visible.map((row, i) => (
-                <tr key={row.id}>
-                  <td>{start + i + 1}</td>
-                  {columns.map((c) => <td key={c.label}>{c.render(row)}</td>)}
-                  <td>
-                    <div className="actions-cell">
-                      <button className="action-edit" title="Edit" aria-label={`Edit ${nameOf(row)}`} onClick={() => open('edit', row)}><Edit2 size={16} /></button>
-                      <button className="action-delete" title="Delete" aria-label={`Delete ${nameOf(row)}`} onClick={() => open('delete', row)}><Trash2 size={16} /></button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {visible.length === 0 && (
-            <EmptyState
-              text={q ? 'No results. Try a different search.' : `No ${noun.toLowerCase()}s yet. Click "Add New" to create one.`}
-            />
-          )}
-        </div>
-        <div className="table-footer">
-          <span>
-            {filtered.length ? `Showing ${start + 1}-${start + visible.length} of ${filtered.length}` : '0 results'}
-          </span>
-          <div className="pager">
-            <button className="action-edit" aria-label="Previous page" disabled={current === 1} onClick={() => setPage(current - 1)}><ChevronLeft size={16} /></button>
-            <span>Page {current} of {pages}</span>
-            <button className="action-edit" aria-label="Next page" disabled={current === pages} onClick={() => setPage(current + 1)}><ChevronRight size={16} /></button>
+      {groupBy ? (
+        <>
+          <GroupToolbar
+            label={`${filtered.length} ${noun.toLowerCase()}(s) in ${groupList.length} group(s)`}
+            onExpand={() => ui.setAll(groupKeys, true)}
+            onCollapse={() => ui.setAll(groupKeys, false)}
+          />
+          {groupList.length === 0 && <div className="table-container"><EmptyState text={emptyText} /></div>}
+          {groupList.map((g) => (
+            <Group
+              key={g.key}
+              title={g.title}
+              subtitle={groupBy.subtitle?.(g.key)}
+              meta={groupBy.meta ? groupBy.meta(g.key, g.list) : <span className="count-pill">{g.list.length}</span>}
+              open={q ? true : ui.isOpen(g.key)} // open every group while searching
+              onToggle={() => ui.toggle(g.key)}
+            >
+              {renderTable(g.list)}
+            </Group>
+          ))}
+        </>
+      ) : (
+        <div className="table-container">
+          {renderTable(visible, start)}
+          {visible.length === 0 && <EmptyState text={emptyText} />}
+          <div className="table-footer">
+            <span>
+              {filtered.length ? `Showing ${start + 1}-${start + visible.length} of ${filtered.length}` : '0 results'}
+            </span>
+            <div className="pager">
+              <button className="action-edit" aria-label="Previous page" disabled={current === 1} onClick={() => setPage(current - 1)}><ChevronLeft size={16} /></button>
+              <span>Page {current} of {pages}</span>
+              <button className="action-edit" aria-label="Next page" disabled={current === pages} onClick={() => setPage(current + 1)}><ChevronRight size={16} /></button>
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       {(modal?.type === 'add' || modal?.type === 'edit') && (
         <Modal title={`${modal.type === 'add' ? 'Add New' : 'Edit'} ${noun}`} onClose={close} wide={wide}>

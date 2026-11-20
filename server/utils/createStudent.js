@@ -1,13 +1,17 @@
 import bcrypt from 'bcryptjs';
+import { randomInt } from 'node:crypto';
 import User from '../models/User.js';
 import Student from '../models/Student.js';
 import HttpError from './httpError.js';
 import { DEFAULT_PASSWORD } from './constants.js';
 
-export const nextStudentNo = async () => {
-  const last = await Student.findOne().sort({ studentNo: -1 }).select('studentNo');
-  const n = last ? Number(last.studentNo.split('-')[1]) + 1 : 1;
-  return `2026-${String(n).padStart(5, '0')}`;
+// Random student number like 2026-1003637: current year, a dash, 7 random digits. Always unique.
+export const generateStudentNo = async () => {
+  for (let i = 0; i < 20; i += 1) {
+    const no = `${new Date().getFullYear()}-${randomInt(1000000, 10000000)}`;
+    if (!(await Student.exists({ studentNo: no }))) return no;
+  }
+  throw new HttpError(500, 'Could not make a student number. Please try again.');
 };
 
 // Makes the login (User) and the profile (Student) together.
@@ -26,7 +30,7 @@ export default async function createStudent({ name, email, phone, dob, program, 
   try {
     return await Student.create({
       userId: user._id,
-      studentNo: await nextStudentNo(),
+      studentNo: await generateStudentNo(),
       name: name.trim(),
       phone: phone || undefined,
       dob: dob || undefined,

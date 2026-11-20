@@ -53,7 +53,7 @@ export const classesOverlap = (a, b) => overlapDay(a, b) !== null;
 export const daysFromToday = (day) => (DAY_NUM[day] - new Date().getDay() + 7) % 7;
 
 export const initials = (name = '') =>
-  name.replace(/^(Mr|Ms|Mrs|Dr|Engr|Prof)\.?\s+/i, '').split(' ').filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join('');
+  name.split(' ').filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join('');
 
 export const pct = (n, d) => (d ? Math.round((n / d) * 100) : 0);
 

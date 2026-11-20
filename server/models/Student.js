@@ -1,9 +1,12 @@
 import mongoose from 'mongoose';
-import { PROGRAMS } from '../utils/constants.js';
+import { PROGRAMS, STUDENT_NO_RE } from '../utils/constants.js';
 
 const studentSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, unique: true },
-  studentNo: { type: String, required: true, unique: true },
+  studentNo: {
+    type: String, required: [true, 'Student number is required.'], unique: true, trim: true,
+    match: [STUDENT_NO_RE, 'Student number must look like 2024-1003637.'],
+  },
   name: { type: String, required: [true, 'Name is required.'], trim: true },
   phone: { type: String, trim: true, match: [/^\+?[0-9 -]{7,15}$/, 'Phone must have 7 to 15 digits.'] },
   dob: { type: Date, validate: { validator: (d) => d <= new Date(), message: 'Date of birth must be in the past.' } },

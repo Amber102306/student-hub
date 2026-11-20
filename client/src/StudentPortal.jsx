@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { LayoutDashboard, User, Book, Calendar, FileText, Printer, AlertTriangle, Lock, Edit2 } from 'lucide-react';
-import { Shell, PageHeader, Badge, Modal, ConfirmModal, Field, EmptyState, Meetings } from './components';
+import { Shell, PageHeader, Badge, Modal, ConfirmModal, Field, EmptyState, Meetings, Group, GroupToolbar, useGroups } from './components';
 import {
   DAYS, MAX_UNITS, dayShort, enrich, classesOverlap, overlapDay, timeRange, toMin, fmtTime, fmtDate, fmtUnits,
   gradeOf, finalRating, remarkOf, daysFromToday, initials, pct, sortMeetings,
@@ -18,6 +18,7 @@ export default function StudentPortal({ student, db, theme, toggleTheme, onLogou
   const [page, setPage] = useState('dashboard');
   const [dropTarget, setDropTarget] = useState(null);
   const [profileModal, setProfileModal] = useState(null); // 'edit' | 'password'
+  const ui = useGroups(false);
 
   // ----- Data for this student -----
   const regs = db.registrations
@@ -73,6 +74,14 @@ export default function StudentPortal({ student, db, theme, toggleTheme, onLogou
   };
 
   const available = db.classes.map((c) => enrich(db, c)).filter((c) => c.course && !active.some((r) => r.classId === c.id));
+
+  // Group the open classes by course, so the list is short and easy to scan.
+  const byCourse = {};
+  available.forEach((c) => (byCourse[c.courseId] ||= []).push(c));
+  const courseGroups = Object.values(byCourse)
+    .map((list) => ({ course: list[0].course, list }))
+    .sort((a, b) => a.course.code.localeCompare(b.course.code));
+  const groupKeys = courseGroups.map((g) => g.course.id);
 
   // ----- Pages -----
   const renderContent = () => {
@@ -221,32 +230,49 @@ export default function StudentPortal({ student, db, theme, toggleTheme, onLogou
             </div>
 
             <h3 className="section-title">Available Classes</h3>
-            <div className="table-container">
-              <div className="table-scroll">
-                <table>
-                  <thead><tr><th>Course</th><th>Section</th><th>Professor</th><th>Schedule</th><th>Units</th><th>Action</th></tr></thead>
-                  <tbody>
-                    {available.map((c) => {
-                      const reason = blockReason(c);
-                      return (
-                        <tr key={c.id}>
-                          <td><strong>{c.course.code}</strong><br /><small className="muted">{c.course.description}</small></td>
-                          <td>{c.section}</td>
-                          <td>{c.professor?.name}</td>
-                          <td><Meetings meetings={c.meetings} /></td>
-                          <td>{fmtUnits(c.course.units)}</td>
-                          <td>
-                            <button className="btn-primary btn-sm" disabled={!!reason} onClick={() => register(c)}>Register</button>
-                            {reason && <small className="muted block">{reason}</small>}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-                {available.length === 0 && <EmptyState text="No other classes are open right now." />}
-              </div>
-            </div>
+            {courseGroups.length === 0 ? (
+              <div className="table-container"><EmptyState text="No other classes are open right now." /></div>
+            ) : (
+              <>
+                <GroupToolbar
+                  label={`${available.length} class(es) in ${courseGroups.length} course(s)`}
+                  onExpand={() => ui.setAll(groupKeys, true)}
+                  onCollapse={() => ui.setAll(groupKeys, false)}
+                />
+                {courseGroups.map(({ course, list }) => (
+                  <Group
+                    key={course.id}
+                    title={`${course.code} - ${course.description}`}
+                    subtitle={`${fmtUnits(course.units)} units`}
+                    meta={<span className="count-pill">{list.length} section(s)</span>}
+                    open={ui.isOpen(course.id)}
+                    onToggle={() => ui.toggle(course.id)}
+                  >
+                    <div className="table-scroll">
+                      <table>
+                        <thead><tr><th>Section</th><th>Professor</th><th>Schedule</th><th>Action</th></tr></thead>
+                        <tbody>
+                          {list.map((c) => {
+                            const reason = blockReason(c);
+                            return (
+                              <tr key={c.id}>
+                                <td><strong>{c.section}</strong></td>
+                                <td>{c.professor?.name}</td>
+                                <td><Meetings meetings={c.meetings} /></td>
+                                <td>
+                                  <button className="btn-primary btn-sm" disabled={!!reason} onClick={() => register(c)}>Register</button>
+                                  {reason && <small className="muted block">{reason}</small>}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </Group>
+                ))}
+              </>
+            )}
           </>
         );
 
