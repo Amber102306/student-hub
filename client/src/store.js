@@ -1,82 +1,122 @@
-import { useState } from 'react';
-import {
-  uid, nextStudentNo, DEFAULT_PASSWORD,
-  SEED_TEACHERS, SEED_SUBJECTS, SEED_CLASSES, SEED_STUDENTS, SEED_REGISTRATIONS, SEED_GRADES,
-} from './data';
+import { useState, useEffect, useCallback } from 'react';
+import { api } from './api';
 
-// All data lives in React state for now. Later, swap these actions for API calls.
-export function useDB() {
-  const [teachers, setTeachers] = useState(SEED_TEACHERS);
-  const [subjects, setSubjects] = useState(SEED_SUBJECTS);
-  const [classes, setClasses] = useState(SEED_CLASSES);
-  const [students, setStudents] = useState(SEED_STUDENTS);
-  const [registrations, setRegistrations] = useState(SEED_REGISTRATIONS);
-  const [grades, setGrades] = useState(SEED_GRADES);
+const EMPTY = { students: [], teachers: [], subjects: [], classes: [], registrations: [], grades: [] };
+const idOf = (x) => (x && typeof x === 'object' ? x._id : x);
 
-  const add = (set) => (item) => set((l) => [...l, { ...item, id: uid() }]);
-  const edit = (set) => (id, patch) => set((l) => l.map((x) => (x.id === id ? { ...x, ...patch } : x)));
-  const del = (set) => (id) => set((l) => l.filter((x) => x.id !== id));
+// The server uses _id and populated objects. These turn them into the
+// simple shapes the pages already use (id, subjectId, '' for empty grades).
+const toStudent = (s, email) => ({
+  id: s._id, studentNo: s.studentNo, name: s.name, email: s.email ?? email ?? '',
+  phone: s.phone || '', dob: s.dob ? s.dob.slice(0, 10) : '', course: s.course,
+});
+const toTeacher = (t) => ({ id: t._id, name: t.name, email: t.email, department: t.department });
+const toSubject = (s) => ({ id: s._id, code: s.code, name: s.name, units: s.units });
+const toClass = (c) => ({
+  id: c._id, subjectId: idOf(c.subjectId), teacherId: idOf(c.teacherId),
+  section: c.section, day: c.day, start: c.start, end: c.end, room: c.room,
+});
+const toReg = (r) => ({ id: r._id, studentId: idOf(r.studentId), classId: idOf(r.classId), status: r.status });
+const toGrade = (g) => ({
+  id: g._id, studentId: idOf(g.studentId), subjectId: idOf(g.subjectId), midterm: g.midterm ?? '', finals: g.finals ?? '',
+});
 
-  const addStudents = (items) =>
-    setStudents((l) => {
-      const list = [...l];
-      items.forEach((i) =>
-        list.push({ ...i, id: uid(), studentNo: nextStudentNo(list), password: i.password || DEFAULT_PASSWORD })
-      );
-      return list;
-    });
+export const buildSession = ({ user, student }) =>
+  user.role === 'admin'
+    ? { role: 'admin', user }
+    : { role: 'student', user, student: toStudent(student, user.email), id: student._id };
+
+// Same actions as before, but now they call the API and then reload the data.
+export function useDB(session) {
+  const [data, setData] = useState(EMPTY);
+  const [loadedFor, setLoadedFor] = useState(null);
+  const [loadError, setLoadError] = useState('');
+
+  const reload = useCallback(async () => {
+    if (!session) return;
+    if (session.role === 'admin') {
+      const [students, teachers, subjects, classes, registrations, grades] = await Promise.all([
+        api.get('/students'), api.get('/teachers'), api.get('/subjects'),
+        api.get('/classes'), api.get('/registrations'), api.get('/grades'),
+      ]);
+      setData({
+        students: students.map((s) => toStudent(s)),
+        teachers: teachers.map(toTeacher),
+        subjects: subjects.map(toSubject),
+        classes: classes.map(toClass),
+        registrations: registrations.map(toReg),
+        grades: grades.map(toGrade),
+      });
+    } else {
+      const [me, teachers, subjects, classes, registrations, grades] = await Promise.all([
+        api.get('/auth/me'), api.get('/teachers'), api.get('/subjects'),
+        api.get('/classes'), api.get('/registrations/mine'), api.get('/grades/mine'),
+      ]);
+      setData({
+        students: [toStudent(me.student, me.user.email)],
+        teachers: teachers.map(toTeacher),
+        subjects: subjects.map(toSubject),
+        classes: classes.map(toClass),
+        registrations: registrations.map(toReg),
+        grades: grades.map(toGrade),
+      });
+    }
+    setLoadedFor(session.user.id);
+  }, [session]);
+
+  useEffect(() => {
+    if (!session) { setData(EMPTY); setLoadedFor(null); setLoadError(''); return; }
+    setLoadError('');
+    reload().catch((e) => setLoadError(e.message));
+  }, [session, reload]);
+
+  // Run an API call, then refresh the lists. Errors go back to the page.
+  const run = (fn) => async (...args) => {
+    const result = await fn(...args);
+    await reload();
+    return result;
+  };
 
   return {
-    teachers, subjects, classes, students, registrations, grades,
+    ...data,
+    loading: !!session && loadedFor !== session.user.id && !loadError,
+    loadError,
+    reload,
 
     // Teachers
-    addTeacher: add(setTeachers),
-    editTeacher: edit(setTeachers),
-    removeTeacher: del(setTeachers),
-    addTeachers: (items) => setTeachers((l) => [...l, ...items.map((i) => ({ ...i, id: uid() }))]),
+    addTeacher: run((v) => api.post('/teachers', v)),
+    editTeacher: run((id, v) => api.put(`/teachers/${id}`, v)),
+    removeTeacher: run((id) => api.del(`/teachers/${id}`)),
+    addTeachers: run((list) => api.post('/teachers/bulk', { teachers: list })),
 
-    // Subjects (deleting one also removes its classes, registrations and grades)
-    addSubject: add(setSubjects),
-    editSubject: edit(setSubjects),
-    addSubjects: (items) => setSubjects((l) => [...l, ...items.map((i) => ({ ...i, id: uid() }))]),
-    removeSubject: (id) => {
-      const classIds = classes.filter((c) => c.subjectId === id).map((c) => c.id);
-      setSubjects((l) => l.filter((s) => s.id !== id));
-      setClasses((l) => l.filter((c) => c.subjectId !== id));
-      setRegistrations((l) => l.filter((r) => !classIds.includes(r.classId)));
-      setGrades((l) => l.filter((g) => g.subjectId !== id));
-    },
+    // Subjects
+    addSubject: run((v) => api.post('/subjects', v)),
+    editSubject: run((id, v) => api.put(`/subjects/${id}`, v)),
+    removeSubject: run((id) => api.del(`/subjects/${id}`)),
+    addSubjects: run((list) => api.post('/subjects/bulk', { subjects: list })),
 
-    // Classes (deleting one also removes its registrations)
-    addClass: add(setClasses),
-    editClass: edit(setClasses),
-    removeClass: (id) => {
-      setClasses((l) => l.filter((c) => c.id !== id));
-      setRegistrations((l) => l.filter((r) => r.classId !== id));
-    },
+    // Classes
+    addClass: run((v) => api.post('/classes', v)),
+    editClass: run((id, v) => api.put(`/classes/${id}`, v)),
+    removeClass: run((id) => api.del(`/classes/${id}`)),
 
-    // Students (deleting one also removes their registrations and grades)
-    addStudents,
-    addStudent: (item) => addStudents([item]),
-    editStudent: edit(setStudents),
-    removeStudent: (id) => {
-      setStudents((l) => l.filter((s) => s.id !== id));
-      setRegistrations((l) => l.filter((r) => r.studentId !== id));
-      setGrades((l) => l.filter((g) => g.studentId !== id));
-    },
+    // Students (admin)
+    addStudent: run((v) => api.post('/students', v)),
+    addStudents: run((list) => api.post('/students/bulk', { students: list })),
+    editStudent: run((id, v) => api.put(`/students/${id}`, v)),
+    removeStudent: run((id) => api.del(`/students/${id}`)),
+
+    // Student (own account)
+    updateMyProfile: run((v) => api.put('/students/me', v)),
+    changePassword: (current, next) => api.put('/auth/password', { current, next }),
 
     // Registrations
-    register: (studentId, classId) =>
-      setRegistrations((l) => [...l, { id: uid(), studentId, classId, status: 'pending' }]),
-    setRegStatus: edit(setRegistrations),
-    dropReg: del(setRegistrations),
+    register: run((classId) => api.post('/registrations', { classId })),
+    setRegStatus: run((id, patch) => api.put(`/registrations/${id}/status`, { status: patch.status })),
+    dropReg: run((id) => api.del(`/registrations/${id}`)),
 
     // Grades
-    saveGrade: (studentId, subjectId, midterm, finals) =>
-      setGrades((l) =>
-        l.some((g) => g.studentId === studentId && g.subjectId === subjectId)
-          ? l.map((g) => (g.studentId === studentId && g.subjectId === subjectId ? { ...g, midterm, finals } : g))
-          : [...l, { id: uid(), studentId, subjectId, midterm, finals }]
-      ),
+    saveGrade: run((studentId, subjectId, midterm, finals) =>
+      api.put('/grades', { studentId, subjectId, midterm, finals })),
   };
 }

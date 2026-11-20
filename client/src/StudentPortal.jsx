@@ -1,4 +1,4 @@
-import { useState } from 'react';
+ import { useState } from 'react';
 import { LayoutDashboard, User, Book, Calendar, FileText, Printer, AlertTriangle, Lock, Edit2 } from 'lucide-react';
 import { Shell, PageHeader, Badge, Modal, ConfirmModal, Field, EmptyState } from './components';
 import {
@@ -50,16 +50,24 @@ export default function StudentPortal({ student, db, theme, toggleTheme, onLogou
     return null;
   };
 
-  const register = (c) => {
+  const register = async (c) => {
     const reason = blockReason(c);
     if (reason) return notify(reason, 'error');
-    db.register(student.id, c.id);
-    notify('Registration sent. Wait for admin approval.');
+    try {
+      await db.register(c.id);
+      notify('Registration sent. Wait for admin approval.');
+    } catch (err) {
+      notify(err.message, 'error');
+    }
   };
 
-  const confirmDrop = () => {
-    db.dropReg(dropTarget.id);
-    notify(`${dropTarget.cls.subject.code} removed from your list.`);
+  const confirmDrop = async () => {
+    try {
+      await db.dropReg(dropTarget.id);
+      notify(`${dropTarget.cls.subject.code} removed from your list.`);
+    } catch (err) {
+      notify(err.message, 'error');
+    }
     setDropTarget(null);
   };
 
@@ -382,14 +390,18 @@ function EditProfileModal({ student, db, notify, onClose }) {
     { name: 'phone', label: 'Phone', optional: true, placeholder: '+639171234567' },
     { name: 'dob', label: 'Date of Birth', type: 'date', optional: true },
   ];
-  const submit = (e) => {
+  const submit = async (e) => {
     e.preventDefault();
     if (!form.name.trim()) return setError('Name is required.');
     if (form.phone && !/^\+?[0-9 -]{7,15}$/.test(form.phone)) return setError('Phone must have 7 to 15 digits.');
     if (form.dob && new Date(form.dob) > new Date()) return setError('Date of birth must be a past date.');
-    db.editStudent(student.id, { name: form.name.trim(), phone: form.phone.trim(), dob: form.dob });
-    notify('Profile updated.');
-    onClose();
+    try {
+      await db.updateMyProfile({ name: form.name.trim(), phone: form.phone.trim(), dob: form.dob });
+      notify('Profile updated.');
+      onClose();
+    } catch (err) {
+      setError(err.message);
+    }
   };
   return (
     <Modal title="Edit Profile" onClose={onClose}>
@@ -414,15 +426,18 @@ function PasswordModal({ student, db, notify, onClose }) {
     { name: 'next', label: 'New Password', type: 'password', autoComplete: 'new-password', hint: 'At least 8 characters.' },
     { name: 'confirm', label: 'Confirm New Password', type: 'password', autoComplete: 'new-password' },
   ];
-  const submit = (e) => {
+  const submit = async (e) => {
     e.preventDefault();
-    if (form.current !== student.password) return setError('Current password is wrong.');
     if (form.next.length < 8) return setError('New password must have at least 8 characters.');
     if (form.next === form.current) return setError('New password must be different from the current one.');
     if (form.next !== form.confirm) return setError('New passwords do not match.');
-    db.editStudent(student.id, { password: form.next });
-    notify('Password changed.');
-    onClose();
+    try {
+      await db.changePassword(form.current, form.next); // the server checks the current password
+      notify('Password changed.');
+      onClose();
+    } catch (err) {
+      setError(err.message);
+    }
   };
   return (
     <Modal title="Change Password" onClose={onClose}>

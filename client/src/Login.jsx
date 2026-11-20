@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { Eye, EyeOff, Moon, Sun } from 'lucide-react';
 import { ADMIN, DEMO_STUDENT, COURSES } from './data';
+import { api, setToken } from './api';
+import { buildSession } from './store';
 
 function PasswordInput({ id, value, onChange, autoComplete }) {
   const [show, setShow] = useState(false);
@@ -14,12 +16,13 @@ function PasswordInput({ id, value, onChange, autoComplete }) {
   );
 }
 
-export default function Login({ db, theme, toggleTheme, onLogin, notify }) {
+export default function Login({ theme, toggleTheme, onLogin, notify }) {
   const [view, setView] = useState('login'); // 'login' | 'signup'
   const [role, setRole] = useState('student');
   const [email, setEmail] = useState(DEMO_STUDENT.email);
   const [password, setPassword] = useState(DEMO_STUDENT.password);
   const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
   const [signup, setSignup] = useState({ name: '', email: '', course: COURSES[0], password: '', confirm: '' });
 
   const demo = role === 'admin' ? ADMIN : DEMO_STUDENT;
@@ -34,31 +37,43 @@ export default function Login({ db, theme, toggleTheme, onLogin, notify }) {
 
   const goTo = (next) => { setView(next); setError(''); };
 
-  const handleLogin = (e) => {
+  const handleLogin = async (e) => {
     e.preventDefault();
-    const mail = email.trim().toLowerCase();
-    if (role === 'admin') {
-      if (mail === ADMIN.email && password === ADMIN.password) return onLogin({ role: 'admin' });
-    } else {
-      const s = db.students.find((x) => x.email.toLowerCase() === mail && x.password === password);
-      if (s) return onLogin({ role: 'student', id: s.id });
+    setBusy(true);
+    setError('');
+    try {
+      const res = await api.post('/auth/login', { email: email.trim(), password });
+      // The Admin tab only accepts admins. The Student tab only accepts students.
+      if (res.user.role !== role) throw new Error('Wrong email or password. Please try again.');
+      setToken(res.token);
+      onLogin(buildSession(res));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
     }
-    setError('Wrong email or password. Please try again.');
   };
 
-  const handleSignup = (e) => {
+  const handleSignup = async (e) => {
     e.preventDefault();
-    const mail = signup.email.trim().toLowerCase();
-    if (!/^\S+@\S+\.\S+$/.test(mail)) return setError('Enter a valid email address.');
-    if (db.students.some((s) => s.email.toLowerCase() === mail)) return setError('That email already has an account.');
+    setError('');
     if (signup.password.length < 8) return setError('Password must have at least 8 characters.');
     if (signup.password !== signup.confirm) return setError('Passwords do not match.');
-    db.addStudent({ name: signup.name.trim(), email: mail, phone: '', dob: '', course: signup.course, password: signup.password });
-    notify('Account created. You can log in now.');
-    setRole('student');
-    setEmail(mail);
-    setPassword('');
-    goTo('login');
+    setBusy(true);
+    try {
+      await api.post('/auth/register', {
+        name: signup.name.trim(), email: signup.email.trim(), course: signup.course, password: signup.password,
+      });
+      notify('Account created. You can log in now.');
+      setRole('student');
+      setEmail(signup.email.trim().toLowerCase());
+      setPassword('');
+      goTo('login');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
   };
 
   const setS = (e) => setSignup({ ...signup, [e.target.name]: e.target.value });
@@ -87,7 +102,7 @@ export default function Login({ db, theme, toggleTheme, onLogin, notify }) {
                 <label htmlFor="login-password">Password</label>
                 <PasswordInput id="login-password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" />
               </div>
-              <button type="submit" className="login-submit-btn">Log In</button>
+              <button type="submit" className="login-submit-btn" disabled={busy}>{busy ? 'Please wait...' : 'Log In'}</button>
             </form>
 
             <p className="login-demo">Demo account: {demo.email} / {demo.password}</p>
@@ -136,7 +151,7 @@ export default function Login({ db, theme, toggleTheme, onLogin, notify }) {
                 <label htmlFor="su-confirm">Confirm Password</label>
                 <PasswordInput id="su-confirm" value={signup.confirm} onChange={(e) => setSignup({ ...signup, confirm: e.target.value })} autoComplete="new-password" />
               </div>
-              <button type="submit" className="login-submit-btn">Create Account</button>
+              <button type="submit" className="login-submit-btn" disabled={busy}>{busy ? 'Please wait...' : 'Create Account'}</button>
             </form>
 
             <div className="login-footer" style={{ marginTop: '1.5rem' }}>

@@ -45,19 +45,27 @@ export default function AdminPortal({ db, theme, toggleTheme, onLogout, notify }
   const title = sections.flatMap((s) => s.items).find((i) => i.key === page).label;
 
   // ----- Registration actions -----
-  const approve = (r) => {
+  const approve = async (r) => {
     const target = cls(r.classId);
     const clash = db.registrations
       .filter((x) => x.studentId === r.studentId && x.status === 'approved' && x.id !== r.id)
       .map((x) => cls(x.classId))
       .find((c) => c && overlaps(c, target));
     if (clash) return notify(`Cannot approve. It overlaps with ${subj(clash.subjectId)?.code} on ${clash.day}.`, 'error');
-    db.setRegStatus(r.id, { status: 'approved' });
-    notify('Registration approved.');
+    try {
+      await db.setRegStatus(r.id, { status: 'approved' });
+      notify('Registration approved.');
+    } catch (err) {
+      notify(err.message, 'error');
+    }
   };
-  const reject = (r) => {
-    db.setRegStatus(r.id, { status: 'rejected' });
-    notify('Registration rejected.');
+  const reject = async (r) => {
+    try {
+      await db.setRegStatus(r.id, { status: 'rejected' });
+      notify('Registration rejected.');
+    } catch (err) {
+      notify(err.message, 'error');
+    }
   };
 
   // ----- Validation -----
@@ -400,13 +408,17 @@ function GradesPage({ db, notify }) {
     setEditing(x);
   };
 
-  const save = (e) => {
+  const save = async (e) => {
     e.preventDefault();
     const vals = ['midterm', 'finals'].map((k) => (form[k] === '' ? '' : Number(form[k])));
     if (vals.some((v) => v !== '' && (Number.isNaN(v) || v < 1 || v > 5))) return setError('Grades must be from 1.00 to 5.00.');
-    db.saveGrade(editing.student.id, editing.subject.id, vals[0], vals[1]);
-    notify('Grades saved.');
-    setEditing(null);
+    try {
+      await db.saveGrade(editing.student.id, editing.subject.id, vals[0], vals[1]);
+      notify('Grades saved.');
+      setEditing(null);
+    } catch (err) {
+      setError(err.message);
+    }
   };
 
   return (

@@ -29,6 +29,7 @@ export default function CrudPage({
   const [form, setForm] = useState({});
   const [error, setError] = useState('');
   const [bulkText, setBulkText] = useState('');
+  const [busy, setBusy] = useState(false);
 
   const q = query.trim().toLowerCase();
   const filtered = q ? rows.filter((r) => searchText(r).toLowerCase().includes(q)) : rows;
@@ -57,15 +58,22 @@ export default function CrudPage({
   const close = () => setModal(null);
   const change = (e) => setForm((f) => ({ ...f, [e.target.name]: e.target.value }));
 
-  const submit = (e) => {
+  const submit = async (e) => {
     e.preventDefault();
     const values = clean(form);
     const err = validate?.(values, modal.row, []);
     if (err) return setError(err);
-    if (modal.type === 'add') onAdd(values);
-    else onEdit(modal.row.id, values);
-    notify(`${noun} ${modal.type === 'add' ? 'added' : 'updated'}.`);
-    close();
+    setBusy(true);
+    try {
+      if (modal.type === 'add') await onAdd(values);
+      else await onEdit(modal.row.id, values);
+      notify(`${noun} ${modal.type === 'add' ? 'added' : 'updated'}.`);
+      close();
+    } catch (e2) {
+      setError(e2.message); // message from the server
+    } finally {
+      setBusy(false);
+    }
   };
 
   const readFile = (e) => {
@@ -76,7 +84,7 @@ export default function CrudPage({
     reader.readAsText(file);
   };
 
-  const importBulk = () => {
+  const importBulk = async () => {
     const header = fields.find((f) => f.name === bulk.fields[0])?.label.toLowerCase();
     const lines = bulkText.split('\n').map((l) => l.trim()).filter(Boolean);
     const good = [];
@@ -92,14 +100,27 @@ export default function CrudPage({
       good.push(values);
     });
     if (!good.length) return setError('No valid rows found. Check the format and try again.');
-    bulk.onImport(good);
-    notify(`Imported ${good.length} ${noun.toLowerCase()}(s)${bad ? `, skipped ${bad} invalid row(s)` : ''}.`);
-    close();
+    setBusy(true);
+    try {
+      const res = await bulk.onImport(good);
+      const made = res?.created ?? good.length;
+      const skipped = bad + (res?.skipped?.length || 0);
+      notify(`Imported ${made} ${noun.toLowerCase()}(s)${skipped ? `, skipped ${skipped} invalid row(s)` : ''}.`);
+      close();
+    } catch (e2) {
+      setError(e2.message);
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const confirmDelete = () => {
-    onDelete(modal.row.id);
-    notify(`${noun} deleted.`);
+  const confirmDelete = async () => {
+    try {
+      await onDelete(modal.row.id);
+      notify(`${noun} deleted.`);
+    } catch (e2) {
+      notify(e2.message, 'error');
+    }
     close();
   };
 
@@ -174,7 +195,7 @@ export default function CrudPage({
             {fields.map((f) => <Field key={f.name} field={f} value={form[f.name]} onChange={change} />)}
             <div className="modal-actions">
               <button type="button" className="btn-cancel" onClick={close}>Cancel</button>
-              <button type="submit" className="btn-primary">Save {noun}</button>
+              <button type="submit" className="btn-primary" disabled={busy}>{busy ? 'Saving...' : `Save ${noun}`}</button>
             </div>
           </form>
         </Modal>
@@ -196,7 +217,7 @@ export default function CrudPage({
           {bulk.note && <p className="form-hint">{bulk.note}</p>}
           <div className="modal-actions">
             <button type="button" className="btn-cancel" onClick={close}>Cancel</button>
-            <button type="button" className="btn-primary" onClick={importBulk} disabled={!bulkText.trim()}>Import Data</button>
+            <button type="button" className="btn-primary" onClick={importBulk} disabled={!bulkText.trim() || busy}>Import Data</button>
           </div>
         </Modal>
       )}

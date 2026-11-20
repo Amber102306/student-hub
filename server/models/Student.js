@@ -1,31 +1,13 @@
-const mongoose = require('mongoose');
+import mongoose from 'mongoose';
+import { COURSES } from '../utils/constants.js';
 
 const studentSchema = new mongoose.Schema({
-  name: { 
-    type: String, 
-    required: true,
-    trim: true 
-  },
-  roll: { 
-    type: String, 
-    required: true,
-    unique: true 
-  },
-  phone: { 
-    type: String, 
-    required: true,
-    match: [/^\+?[0-9]{10,15}$/, 'Please enter a valid phone number']
-  },
-  dob: { 
-    type: String, // Kept as String to match your frontend 'DD-MM-YYYY' format for now
-    required: true 
-  },
-  // This acts similarly to a foreign key, referencing the Class model
-  classId: { 
-    type: mongoose.Schema.Types.ObjectId, 
-    ref: 'Class',
-    required: false // Set to false initially so you can insert data without a class
-  }
-}, { timestamps: true });
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, unique: true },
+  studentNo: { type: String, required: true, unique: true },
+  name: { type: String, required: [true, 'Name is required.'], trim: true },
+  phone: { type: String, trim: true, match: [/^\+?[0-9 -]{7,15}$/, 'Phone must have 7 to 15 digits.'] },
+  dob: { type: Date, validate: { validator: (d) => d <= new Date(), message: 'Date of birth must be in the past.' } },
+  course: { type: String, required: [true, 'Course is required.'], enum: { values: COURSES, message: 'Pick a valid course.' } },
+});
 
-module.exports = mongoose.model('Student', studentSchema);
+export default mongoose.model('Student', studentSchema);
