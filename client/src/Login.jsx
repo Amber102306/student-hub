@@ -105,8 +105,6 @@ export default function Login({ theme, toggleTheme, onLogin, notify }) {
               <button type="submit" className="login-submit-btn" disabled={busy}>{busy ? 'Please wait...' : 'Log In'}</button>
             </form>
 
-            <p className="login-demo">Demo account: {demo.email} / {demo.password}</p>
-
             <div className="login-footer">
               {role === 'student' && (
                 <p className="login-footer-text">

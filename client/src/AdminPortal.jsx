@@ -346,7 +346,7 @@ export default function AdminPortal({ db, theme, toggleTheme, onLogout, notify }
 
   return (
     <Shell
-      brand="AttendX Admin" userLabel={ADMIN.name} sections={sections} active={page} onNav={setPage}
+      brand="SemLoad Admin" userLabel={ADMIN.name} sections={sections} active={page} onNav={setPage}
       theme={theme} toggleTheme={toggleTheme} onLogout={onLogout}
     >
       <PageHeader title={title} />

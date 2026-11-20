@@ -383,7 +383,7 @@ export default function StudentPortal({ student, db, theme, toggleTheme, onLogou
 
   return (
     <Shell
-      brand="AttendX Student" userLabel={student.name} sections={[{ items: NAV.map((n) => (n.key === 'courses' ? { ...n, count: pending.length } : n)) }]}
+      brand="SemLoad Student" userLabel={student.name} sections={[{ items: NAV.map((n) => (n.key === 'courses' ? { ...n, count: pending.length } : n)) }]}
       active={page} onNav={setPage} theme={theme} toggleTheme={toggleTheme} onLogout={onLogout}
     >
       {renderContent()}
